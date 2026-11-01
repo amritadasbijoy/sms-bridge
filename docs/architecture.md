@@ -221,6 +221,34 @@ SSLServerSocket(0)  ── QR: smsbridge://pair?v=1&h=IP&p=PORT&fp=SHA256(cert)&
 - **Code:** the engines (`TransferServer`, `TransferClient`) are plain Kotlin and tested end to end over
   localhost TLS with test identities (`app/src/test/resources/test-tls-*.p12`, test-only keys).
 
+## Server (Phase 5)
+
+`backend/`: Kotlin 1.9.24, Ktor 2.3.12 (Netty), PostgreSQL 16 via HikariCP and parameterised JDBC,
+Flyway migrations, kotlinx.serialization. A single module; `Application.module(config, db)` is
+used by both `main` and the tests.
+
+| Table | Purpose |
+|---|---|
+| `users`, `user_sessions` | Accounts (Argon2id) and cookie sessions (token hashes) |
+| `devices`, `device_tokens`, `revoked_devices`, `pairing_codes` | Phone registration via one-time codes, bearer tokens (hashes), revocation |
+| `sync_events`, `sync_checkpoints` | Phase 6: ciphertext events with the device sequence (unique per device) and a server-assigned `server_sequence` |
+| `backups` | Phase 6+: metadata for encrypted backups in object storage (`encrypted` must be true) |
+| `account_settings`, `audit_events` | Settings JSON; security audit trail |
+
+API (`/api/openapi.yaml`): `GET /health`; `/api/v1/auth/{status,register,login,logout,me}`;
+`/api/v1/devices` (list), `/devices/pairing-codes`, `/devices/register`, `/devices/{id}/revoke`;
+`GET /api/v1/device` (bearer).
+
+Phone registration (used by the app in Phase 6):
+
+```
+browser (signed in) ── POST /devices/pairing-codes ──▶ "7K3QD-9XW2M" (10 min, once)
+phone ── POST /devices/register {pairingCode, deviceId, name, platform, publicKey?} ──▶ {deviceToken}
+phone ── Authorization: Bearer <deviceToken> ──▶ /api/v1/device (and the sync endpoints, Phase 6)
+```
+
+Deployment: see [deployment.md](deployment.md).
+
 ## Local database (Room, schema v2)
 
 | Table | Purpose |

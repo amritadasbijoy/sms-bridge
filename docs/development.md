@@ -33,6 +33,21 @@ cd android
 
 `local.properties` (git-ignored) must contain `sdk.dir=/path/to/Android/sdk`.
 
+## Server (backend/)
+
+```bash
+cd backend
+./gradlew test            # integration tests: needs Docker running (Testcontainers starts PostgreSQL 16)
+./gradlew installDist     # build/install/sms-bridge-server, used by the Docker image
+cd ../infrastructure
+cp .env.example .env      # set POSTGRES_PASSWORD; SMSBRIDGE_COOKIE_SECURE=false for local http
+docker compose up -d --build && curl -s http://127.0.0.1:8080/health
+docker compose down       # stops; data stays in the db-data volume
+```
+
+Docker Engine 29 rejects API versions below 1.40, so the test task sets `-Dapi.version=1.44` for
+Testcontainers' Docker client.
+
 ## Emulator workflow (preferred for testing)
 
 Test on emulators with synthetic messages. Real phones in this household carry real messages;

@@ -1,0 +1,158 @@
+openapi: 3.0.3
+info:
+  title: SMS Bridge server
+  version: 0.1.0
+  description: |
+    Self-hosted SMS Bridge API (Phase 5: accounts, sessions, device registration).
+    The server never receives message content in plaintext (sync arrives in Phase 6, encrypted on the phone).
+
+    Browser/API sessions use the HttpOnly `sb_session` cookie. Every cookie-authenticated request
+    other than GET must send `X-Requested-With: SmsBridge` (CSRF defence).
+    Phones authenticate with `Authorization: Bearer <deviceToken>`.
+servers:
+  - url: /
+components:
+  securitySchemes:
+    session:
+      type: apiKey
+      in: cookie
+      name: sb_session
+    device:
+      type: http
+      scheme: bearer
+  schemas:
+    Error:
+      type: object
+      required: [error, message]
+      properties:
+        error: { type: string, example: invalid_credentials }
+        message: { type: string }
+    Credentials:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string, pattern: '^[A-Za-z0-9._-]{3,64}$' }
+        password: { type: string, minLength: 12, maxLength: 256 }
+    Me:
+      type: object
+      properties:
+        userId: { type: string, format: uuid }
+        username: { type: string }
+    PairingCode:
+      type: object
+      properties:
+        code: { type: string, example: 7K3QD-9XW2M }
+        expiresAt: { type: string, format: date-time }
+    RegisterDevice:
+      type: object
+      required: [pairingCode, deviceId, name, platform]
+      properties:
+        pairingCode: { type: string }
+        deviceId: { type: string, format: uuid }
+        name: { type: string, maxLength: 64 }
+        platform: { type: string, enum: [android] }
+        publicKey: { type: string, maxLength: 512, nullable: true }
+    DeviceToken:
+      type: object
+      properties:
+        deviceId: { type: string, format: uuid }
+        deviceToken: { type: string, description: Shown once. Store in Android Keystore-protected storage. }
+    Device:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        platform: { type: string }
+        createdAt: { type: string, format: date-time }
+        lastSeenAt: { type: string, format: date-time, nullable: true }
+        revokedAt: { type: string, format: date-time, nullable: true }
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+paths:
+  /health:
+    get:
+      summary: Liveness and database check
+      responses:
+        '200': { description: Healthy }
+        '503': { description: Database unreachable }
+  /api/v1/auth/status:
+    get:
+      summary: Whether a new account can be created
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { type: object, properties: { registrationOpen: { type: boolean } } } } }
+  /api/v1/auth/register:
+    post:
+      summary: Create an account (the first account always; more only if enabled). Rate limited.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/Credentials' } } } }
+      responses:
+        '201': { description: Created; sets the session cookie, content: { application/json: { schema: { $ref: '#/components/schemas/Me' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '429': { description: Too many attempts }
+  /api/v1/auth/login:
+    post:
+      summary: Sign in. Rate limited (10/minute per address).
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/Credentials' } } } }
+      responses:
+        '200': { description: Signed in; sets the session cookie, content: { application/json: { schema: { $ref: '#/components/schemas/Me' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '429': { description: Too many attempts }
+  /api/v1/auth/logout:
+    post:
+      summary: End the current session
+      security: [{ session: [] }]
+      parameters: [{ in: header, name: X-Requested-With, required: true, schema: { type: string, enum: [SmsBridge] } }]
+      responses:
+        '204': { description: Signed out }
+  /api/v1/auth/me:
+    get:
+      summary: Current account
+      security: [{ session: [] }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Me' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+  /api/v1/devices:
+    get:
+      summary: List this account's devices
+      security: [{ session: [] }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Device' } } } } }
+  /api/v1/devices/pairing-codes:
+    post:
+      summary: Create a one-time code (10 minutes) to register a phone without a password
+      security: [{ session: [] }]
+      parameters: [{ in: header, name: X-Requested-With, required: true, schema: { type: string, enum: [SmsBridge] } }]
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/PairingCode' } } } }
+  /api/v1/devices/register:
+    post:
+      summary: Called by the phone with a pairing code; returns its device token once. Rate limited.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RegisterDevice' } } } }
+      responses:
+        '201': { description: Registered, content: { application/json: { schema: { $ref: '#/components/schemas/DeviceToken' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /api/v1/devices/{id}/revoke:
+    post:
+      summary: Revoke a device; its tokens stop working immediately
+      security: [{ session: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { in: header, name: X-Requested-With, required: true, schema: { type: string, enum: [SmsBridge] } }
+      responses:
+        '204': { description: Revoked }
+        '404': { $ref: '#/components/responses/Error' }
+  /api/v1/device:
+    get:
+      summary: The calling device (checks a device token)
+      security: [{ device: [] }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Device' } } } }
+        '401': { $ref: '#/components/responses/Error' }

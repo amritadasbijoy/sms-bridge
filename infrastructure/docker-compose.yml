@@ -1,0 +1,82 @@
+# SMS Bridge self-hosted stack.
+#   Local:      docker compose up -d                        (API on http://127.0.0.1:8080)
+#   With HTTPS: docker compose --profile proxy up -d        (Caddy on :80/:443, needs SMSBRIDGE_DOMAIN)
+# Secrets come from .env (copy .env.example); never commit .env.
+
+name: sms-bridge
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  db:
+    image: postgres:16.4-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: smsbridge
+      POSTGRES_USER: smsbridge
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    networks: [internal]          # no published ports: the database is never reachable from outside
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U smsbridge -d smsbridge"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging: *logging
+
+  api:
+    build: ../backend
+    image: sms-bridge-server:local
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      SMSBRIDGE_DB_URL: jdbc:postgresql://db:5432/smsbridge
+      SMSBRIDGE_DB_USER: smsbridge
+      SMSBRIDGE_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      SMSBRIDGE_COOKIE_SECURE: ${SMSBRIDGE_COOKIE_SECURE:-true}
+      SMSBRIDGE_ALLOW_REGISTRATION: ${SMSBRIDGE_ALLOW_REGISTRATION:-false}
+      SMSBRIDGE_TRUST_PROXY: ${SMSBRIDGE_TRUST_PROXY:-false}
+    # Bound to localhost only. In production the proxy is the only public entry point.
+    ports:
+      - "127.0.0.1:${SMSBRIDGE_LOCAL_PORT:-8080}:8080"
+    networks: [internal, edge]
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: ["no-new-privileges:true"]
+    logging: *logging
+
+  proxy:
+    profiles: ["proxy"]
+    image: caddy:2.8.4-alpine
+    restart: unless-stopped
+    depends_on: [api]
+    environment:
+      # Required for this profile; Caddy refuses to start without it. (Not `:?` here: Compose
+      # would then demand it even when the proxy profile is not used.)
+      SMSBRIDGE_DOMAIN: ${SMSBRIDGE_DOMAIN:-}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./proxy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks: [edge]
+    logging: *logging
+
+volumes:
+  db-data:
+  caddy-data:
+  caddy-config:
+
+networks:
+  internal:
+    internal: true                # no route to the internet for the database network
+  edge: {}
