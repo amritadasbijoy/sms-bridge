@@ -5,7 +5,8 @@ Phases run in order; each must pass its acceptance criteria before the next star
 | Phase | Scope | Status |
 |---|---|---|
 | 1 | Android project, permissions, SMS reader, Room, incoming receiver, WorkManager queue, dashboard | **Done: acceptance verified on Galaxy A52 (Android 14)** |
-| 2 | Default SMS handler (SMS_DELIVER, send UI, multipart send, delivery reports, RoleManager flow), two-way capture | **Built and tested on JVM; on-device role test pending** |
+| 2 | Default SMS handler (SMS_DELIVER, send UI, multipart send, delivery reports, RoleManager flow), two-way capture | **Done: send/receive/multipart/role switch verified on Galaxy A52 (Android 14)** |
+| 2.x | Note for users: switching from Google Messages disables RCS until switched back | Documented |
 | 3 | Backup package (manifest.json, messages.xml, metadata.json, checksums.sha256), JSON/CSV export, SAF, restore with temporary default-role guidance | |
 | 4 | Encrypted backup archive, Wi-Fi transfer (NSD + TLS + QR pairing, resumable batches), then Wi-Fi Direct | |
 | 5 | Ktor backend, PostgreSQL, auth, device registration, OpenAPI, Docker Compose | |
