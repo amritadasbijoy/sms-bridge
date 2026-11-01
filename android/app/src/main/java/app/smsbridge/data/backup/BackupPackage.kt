@@ -147,6 +147,8 @@ data class BackupInfo(
     val skippedInvalid: Int,
     val skippedUnsupported: Int,
     val problems: List<String>,
+    /** True when the package was read through [EncryptedBackup] decryption. */
+    val encrypted: Boolean = false,
 ) {
     /** Safe to restore: readable, at least one message, and no integrity problem. */
     val isUsable: Boolean get() = problems.isEmpty() && messageCount > 0

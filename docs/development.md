@@ -72,6 +72,20 @@ $ADB -s emulator-5554 shell run-as app.smsbridge.debug sqlite3 databases/sms_bri
 Note: `content query --uri content://sms` from the adb shell does not show draft and failed rows
 to a caller that is not the default SMS app. Count those through the app's archive instead.
 
+### Testing Wi-Fi transfer between the two emulators
+
+Emulators sit behind separate virtual routers and cannot reach each other directly (and mDNS
+does not cross them). Instead, forward a Mac port to the receiver and point the sender at the host:
+
+1. Boot both (`SmsBridge_A` on 5554, `SmsBridge_B` on 5556) and install the APK on each.
+2. On B, go to Transfer → Start receiving, and note the port shown ("Listening on 10.0.2.x:PORT").
+3. `adb -s emulator-5556 emu redir add tcp:47001:PORT`
+4. Get B's pairing link (decode the QR from a screenshot, or Copy pairing link). Then change
+   `h=…&p=PORT` to `h=10.0.2.2&p=47001` and paste it on A under Transfer → "paste the pairing link".
+5. Confirm on A ("Send"), then on B ("Accept").
+
+On real phones on the same Wi-Fi, scanning the QR code is all that is needed.
+
 ## Installing on a phone
 
 1. On the phone, enable Developer options → USB debugging. Connect over USB and accept the prompt.

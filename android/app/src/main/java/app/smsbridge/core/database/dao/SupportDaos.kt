@@ -9,6 +9,7 @@ import app.smsbridge.core.database.entity.AppSettingEntity
 import app.smsbridge.core.database.entity.DeviceEntity
 import app.smsbridge.core.database.entity.SyncCheckpointEntity
 import app.smsbridge.core.database.entity.SyncOperationEntity
+import app.smsbridge.core.database.entity.TransferSessionEntity
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -51,6 +52,15 @@ interface SyncCheckpointDao {
 
     @Upsert
     suspend fun upsert(checkpoint: SyncCheckpointEntity)
+}
+
+@Dao
+interface TransferSessionDao {
+    @Upsert
+    suspend fun upsert(session: TransferSessionEntity)
+
+    @Query("SELECT * FROM transfer_sessions WHERE id = :id")
+    suspend fun get(id: String): TransferSessionEntity?
 }
 
 @Dao

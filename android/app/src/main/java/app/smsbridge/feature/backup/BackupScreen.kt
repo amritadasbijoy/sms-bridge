@@ -42,7 +42,20 @@ import androidx.lifecycle.viewModelScope
 import androidx.work.WorkInfo
 import app.smsbridge.core.database.entity.BackupHistoryEntity
 import app.smsbridge.data.background.SmsCaptureCoordinator
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.runtime.remember
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import app.smsbridge.data.backup.BackupInfo
+import app.smsbridge.data.backup.BackupProbe
+import app.smsbridge.data.backup.EncryptedBackup
+import app.smsbridge.data.backup.EphemeralKeys
+import app.smsbridge.data.backup.InvalidBackupException
+import app.smsbridge.data.backup.WrongPassphraseException
 import app.smsbridge.data.backup.BackupKind
 import app.smsbridge.data.backup.BackupRepository
 import app.smsbridge.data.backup.BackupScheduler
@@ -71,7 +84,9 @@ import kotlinx.coroutines.withContext
 sealed interface Inspection {
     data object None : Inspection
     data object Checking : Inspection
-    data class Ready(val uri: Uri, val info: BackupInfo) : Inspection
+    data class NeedsPassphrase(val uri: Uri, val header: EncryptedBackup.Header, val error: String? = null) : Inspection
+    /** [keyId] points to the in-memory key for an encrypted backup (see [EphemeralKeys]). */
+    data class Ready(val uri: Uri, val info: BackupInfo, val keyId: String? = null) : Inspection
     data class Error(val message: String) : Inspection
 }
 
@@ -81,6 +96,7 @@ class BackupViewModel @Inject constructor(
     private val scheduler: BackupScheduler,
     val permissions: SmsPermissionManager,
     private val coordinator: SmsCaptureCoordinator,
+    private val keys: EphemeralKeys,
 ) : ViewModel() {
     val work: StateFlow<WorkInfo?> = scheduler.observe().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
     val history: StateFlow<List<BackupHistoryEntity>> =
@@ -90,26 +106,87 @@ class BackupViewModel @Inject constructor(
     private val _inspection = MutableStateFlow<Inspection>(Inspection.None)
     val inspection: StateFlow<Inspection> = _inspection.asStateFlow()
 
+    private val _deriving = MutableStateFlow(false)
+    /** True while a passphrase is being turned into a key (deliberately slow). */
+    val deriving: StateFlow<Boolean> = _deriving.asStateFlow()
+
+    /** Passphrase chosen for the next encrypted export, held only until the file picker returns. */
+    private var pendingPassphrase: CharArray? = null
+
     fun export(uri: Uri, format: ExportFormat) = scheduler.export(uri, format)
 
+    fun setPendingPassphrase(passphrase: CharArray) {
+        pendingPassphrase?.fill('\u0000')
+        pendingPassphrase = passphrase
+    }
+
+    /** Called with the file the user picked, or null if they cancelled the picker. */
+    fun exportEncrypted(uri: Uri?) {
+        val passphrase = pendingPassphrase ?: return
+        pendingPassphrase = null
+        if (uri == null) {
+            passphrase.fill('\u0000')
+            return
+        }
+        viewModelScope.launch {
+            _deriving.value = true
+            val key = withContext(Dispatchers.Default) { EncryptedBackup.deriveKey(passphrase, EncryptedBackup.newHeader()) }
+            _deriving.value = false
+            scheduler.export(uri, ExportFormat.ENCRYPTED, keys.put(key))
+        }
+    }
+
     fun inspect(uri: Uri) {
+        clearInspection()
         _inspection.value = Inspection.Checking
         viewModelScope.launch {
             _inspection.value = try {
-                Inspection.Ready(uri, withContext(Dispatchers.IO) { backups.inspect(uri) })
+                when (val probe = withContext(Dispatchers.IO) { backups.probe(uri) }) {
+                    is BackupProbe.Encrypted -> Inspection.NeedsPassphrase(uri, probe.header)
+                    BackupProbe.Plain -> Inspection.Ready(uri, withContext(Dispatchers.IO) { backups.inspect(uri) })
+                }
+            } catch (e: InvalidBackupException) {
+                Inspection.Error(e.message ?: "This is not a usable backup.")
             } catch (e: Exception) {
                 Inspection.Error("The file could not be read (${e.javaClass.simpleName}).")
             }
         }
     }
 
-    fun restore(uri: Uri, kind: BackupKind, options: RestoreOptions) {
-        scheduler.restore(uri, kind, options)
+    fun unlock(passphrase: CharArray) {
+        val current = _inspection.value as? Inspection.NeedsPassphrase ?: return
+        viewModelScope.launch {
+            _deriving.value = true
+            val key = withContext(Dispatchers.Default) { EncryptedBackup.deriveKey(passphrase, current.header) }
+            _inspection.value = try {
+                val info = withContext(Dispatchers.IO) { backups.inspect(current.uri, key) }
+                Inspection.Ready(current.uri, info, keys.put(key))
+            } catch (e: WrongPassphraseException) {
+                key.wipe()
+                current.copy(error = e.message)
+            } catch (e: Exception) {
+                key.wipe()
+                Inspection.Error("The file could not be read (${e.javaClass.simpleName}).")
+            } finally {
+                _deriving.value = false
+            }
+        }
+    }
+
+    fun restore(uri: Uri, kind: BackupKind, options: RestoreOptions, keyId: String?) {
+        scheduler.restore(uri, kind, options, keyId)
+        // The worker now owns the key and wipes it when done.
         _inspection.value = Inspection.None
     }
 
     fun clearInspection() {
+        (_inspection.value as? Inspection.Ready)?.keyId?.let(keys::remove)
         _inspection.value = Inspection.None
+    }
+
+    override fun onCleared() {
+        pendingPassphrase?.fill('\u0000')
+        (_inspection.value as? Inspection.Ready)?.keyId?.let(keys::remove)
     }
 
     fun onPermissionsChanged() = coordinator.start()
@@ -127,11 +204,15 @@ fun BackupScreen(viewModel: BackupViewModel = hiltViewModel()) {
 
     fun persist(uri: Uri, flags: Int) = runCatching { context.contentResolver.takePersistableUriPermission(uri, flags) }
 
+    val deriving by viewModel.deriving.collectAsStateWithLifecycle()
+    var askExportPassphrase by rememberSaveable { mutableStateOf(false) }
+
     val exportLaunchers = ExportFormat.entries.associateWith { format ->
         rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(format.mimeType)) { uri ->
-            if (uri != null) {
-                persist(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-                viewModel.export(uri, format)
+            if (uri != null) persist(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            when {
+                format == ExportFormat.ENCRYPTED -> viewModel.exportEncrypted(uri)
+                uri != null -> viewModel.export(uri, format)
             }
         }
     }
@@ -142,7 +223,12 @@ fun BackupScreen(viewModel: BackupViewModel = hiltViewModel()) {
         }
     }
 
-    LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    // imePadding: keep the passphrase card reachable above the on-screen keyboard.
+    LazyColumn(
+        modifier = Modifier.imePadding(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
         item { Text("Backup & restore", style = MaterialTheme.typography.headlineSmall) }
 
         item {
@@ -155,16 +241,21 @@ fun BackupScreen(viewModel: BackupViewModel = hiltViewModel()) {
                     modifier = Modifier.padding(top = 4.dp),
                 )
                 Text(
-                    "The file is not encrypted yet (that arrives in a later update). Store it somewhere private.",
+                    "Encrypted backups are protected with a passphrase only you know (AES-256). " +
+                        "Unencrypted backups, JSON and CSV can be read by anyone who gets the file.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.padding(top = 4.dp),
                 )
                 Button(
+                    onClick = { askExportPassphrase = true },
+                    enabled = !busy && !deriving,
+                    modifier = Modifier.padding(top = 8.dp),
+                ) { Text(if (deriving) "Preparing key…" else "Create encrypted backup…") }
+                OutlinedButton(
                     onClick = { exportLaunchers.getValue(ExportFormat.PACKAGE).launch(fileName(ExportFormat.PACKAGE)) },
                     enabled = !busy,
-                    modifier = Modifier.padding(top = 8.dp),
-                ) { Text("Create backup…") }
+                    modifier = Modifier.padding(top = 4.dp),
+                ) { Text("Unencrypted backup…") }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
                     OutlinedButton(onClick = { exportLaunchers.getValue(ExportFormat.JSON).launch(fileName(ExportFormat.JSON)) }, enabled = !busy) {
                         Text("Export JSON…")
@@ -204,6 +295,14 @@ fun BackupScreen(viewModel: BackupViewModel = hiltViewModel()) {
             Inspection.Checking -> item {
                 SectionCard("Checking backup…") { LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp)) }
             }
+            is Inspection.NeedsPassphrase -> item {
+                UnlockCard(
+                    error = current.error,
+                    working = deriving,
+                    onUnlock = viewModel::unlock,
+                    onCancel = viewModel::clearInspection,
+                )
+            }
             is Inspection.Error -> item {
                 SectionCard("Cannot use this file") {
                     Text(current.message, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 4.dp))
@@ -214,7 +313,7 @@ fun BackupScreen(viewModel: BackupViewModel = hiltViewModel()) {
                     info = current.info,
                     permissions = permissions,
                     busy = busy,
-                    onRestore = { options -> viewModel.restore(current.uri, current.info.kind, options) },
+                    onRestore = { options -> viewModel.restore(current.uri, current.info.kind, options, current.keyId) },
                     onCancel = viewModel::clearInspection,
                     defaultAppCard = {
                         DefaultSmsAppCard(
@@ -233,11 +332,101 @@ fun BackupScreen(viewModel: BackupViewModel = hiltViewModel()) {
             items(history, key = { it.id }) { HistoryRow(it) }
         }
     }
+
+    if (askExportPassphrase) {
+        NewPassphraseDialog(
+            onDismiss = { askExportPassphrase = false },
+            onConfirm = { passphrase ->
+                askExportPassphrase = false
+                viewModel.setPendingPassphrase(passphrase)
+                exportLaunchers.getValue(ExportFormat.ENCRYPTED).launch(fileName(ExportFormat.ENCRYPTED))
+            },
+        )
+    }
+}
+
+/** Asks for a new passphrase twice. Never stored; hands a CharArray the caller must wipe. */
+@Composable
+private fun NewPassphraseDialog(onDismiss: () -> Unit, onConfirm: (CharArray) -> Unit) {
+    var first by remember { mutableStateOf("") }
+    var second by remember { mutableStateOf("") }
+    val tooShort = first.length < EncryptedBackup.MIN_PASSPHRASE_LENGTH
+    val mismatch = second.isNotEmpty() && first != second
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Choose a backup passphrase") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "You will need it to restore this backup. SMS Bridge does not store it and cannot recover it: " +
+                        "if you forget it, the backup cannot be opened.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                PassphraseField(first, { first = it }, "Passphrase (at least ${EncryptedBackup.MIN_PASSPHRASE_LENGTH} characters)")
+                PassphraseField(second, { second = it }, "Repeat passphrase")
+                if (mismatch) Text("The passphrases do not match.", color = MaterialTheme.colorScheme.error)
+                Text("Tip: several unrelated words are easier to remember and harder to guess.", style = MaterialTheme.typography.bodySmall)
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConfirm(first.toCharArray()); first = ""; second = "" },
+                enabled = !tooShort && first == second,
+            ) { Text("Continue") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun UnlockCard(error: String?, working: Boolean, onUnlock: (CharArray) -> Unit, onCancel: () -> Unit) {
+    var passphrase by remember { mutableStateOf("") }
+    val submit = {
+        if (passphrase.isNotEmpty() && !working) {
+            onUnlock(passphrase.toCharArray())
+            passphrase = ""
+        }
+    }
+    SectionCard("Encrypted backup") {
+        Text("Enter the passphrase that was chosen when this backup was created.", modifier = Modifier.padding(top = 4.dp))
+        PassphraseField(passphrase, { passphrase = it }, "Passphrase", Modifier.padding(top = 8.dp), onDone = submit)
+        error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 4.dp)) }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
+            Button(onClick = submit, enabled = passphrase.isNotEmpty() && !working) {
+                Text(if (working) "Checking…" else "Unlock")
+            }
+            TextButton(onClick = onCancel) { Text("Cancel") }
+        }
+    }
+}
+
+@Composable
+private fun PassphraseField(
+    value: String,
+    onChange: (String) -> Unit,
+    label: String,
+    modifier: Modifier = Modifier,
+    onDone: (() -> Unit)? = null,
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onChange,
+        label = { Text(label) },
+        singleLine = true,
+        visualTransformation = PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions(
+            keyboardType = KeyboardType.Password,
+            autoCorrect = false,
+            imeAction = if (onDone != null) ImeAction.Done else ImeAction.Next,
+        ),
+        keyboardActions = KeyboardActions(onDone = { onDone?.invoke() }),
+        modifier = modifier.fillMaxWidth(),
+    )
 }
 
 private fun fileName(format: ExportFormat): String {
     val stamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd-HHmm"))
-    val base = if (format == ExportFormat.PACKAGE) "sms-bridge-backup" else "sms-bridge-export"
+    val base = if (format == ExportFormat.PACKAGE || format == ExportFormat.ENCRYPTED) "sms-bridge-backup" else "sms-bridge-export"
     return "$base-$stamp.${format.extension}"
 }
 
@@ -326,7 +515,13 @@ private fun RestorePlanner(
 
     SectionCard(if (info.isUsable) "Backup checked" else "Backup has problems") {
         Column(Modifier.padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(if (info.kind == BackupKind.SMS_BRIDGE_PACKAGE) "SMS Bridge backup package" else "SMS backup XML file")
+            Text(
+                when {
+                    info.encrypted -> "Encrypted SMS Bridge backup (passphrase accepted)"
+                    info.kind == BackupKind.SMS_BRIDGE_PACKAGE -> "SMS Bridge backup package"
+                    else -> "SMS backup XML file"
+                },
+            )
             Text("${info.messageCount} messages: ${info.incoming} received, ${info.outgoing} sent")
             if (info.oldestDate != null && info.newestDate != null) {
                 Text("From ${formatTimestamp(info.oldestDate)} to ${formatTimestamp(info.newestDate)}")
@@ -451,7 +646,8 @@ private fun TargetOption(selected: Boolean, title: String, detail: String, onSel
 @Composable
 private fun HistoryRow(entry: BackupHistoryEntity) {
     val what = when (entry.format) {
-        ExportFormat.PACKAGE.name -> "Backup"
+        ExportFormat.ENCRYPTED.name -> "Encrypted backup"
+        ExportFormat.PACKAGE.name -> "Unencrypted backup"
         ExportFormat.JSON.name -> "JSON export"
         ExportFormat.CSV.name -> "CSV export"
         HistoryKind.RESTORE_ARCHIVE -> "Restore to archive"

@@ -26,17 +26,19 @@ import kotlinx.coroutines.flow.map
 class BackupScheduler @Inject constructor(@ApplicationContext private val context: Context) {
     private val workManager get() = WorkManager.getInstance(context)
 
-    fun export(uri: Uri, format: ExportFormat) {
+    /** [keyId] refers to an [EphemeralKeys] entry; key material itself never enters WorkManager. */
+    fun export(uri: Uri, format: ExportFormat, keyId: String? = null) {
         val request = OneTimeWorkRequestBuilder<BackupExportWorker>()
-            .setInputData(workDataOf(KEY_URI to uri.toString(), KEY_FORMAT to format.name))
+            .setInputData(workDataOf(KEY_URI to uri.toString(), KEY_FORMAT to format.name, KEY_SECRET_ID to keyId))
             .build()
         workManager.enqueueUniqueWork(WORK_BACKUP, ExistingWorkPolicy.KEEP, request)
     }
 
-    fun restore(uri: Uri, kind: BackupKind, options: RestoreOptions) {
+    fun restore(uri: Uri, kind: BackupKind, options: RestoreOptions, keyId: String? = null) {
         val request = OneTimeWorkRequestBuilder<BackupRestoreWorker>()
             .setInputData(
                 workDataOf(
+                    KEY_SECRET_ID to keyId,
                     KEY_URI to uri.toString(),
                     KEY_KIND to kind.name,
                     KEY_TARGET to options.target.name,
@@ -58,6 +60,7 @@ class BackupScheduler @Inject constructor(@ApplicationContext private val contex
     companion object {
         const val WORK_BACKUP = "backup-restore"
         const val KEY_URI = "uri"
+        const val KEY_SECRET_ID = "secret_id"
         const val KEY_FORMAT = "format"
         const val KEY_KIND = "kind"
         const val KEY_TARGET = "target"
@@ -84,15 +87,18 @@ class BackupExportWorker @AssistedInject constructor(
     @Assisted context: Context,
     @Assisted params: WorkerParameters,
     private val backups: BackupRepository,
+    private val keys: EphemeralKeys,
 ) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
         backups.markInterrupted(emptyList())
         val uri = Uri.parse(inputData.getString(BackupScheduler.KEY_URI) ?: return Result.failure())
         val format = ExportFormat.valueOf(inputData.getString(BackupScheduler.KEY_FORMAT) ?: ExportFormat.PACKAGE.name)
+        val keyId = inputData.getString(BackupScheduler.KEY_SECRET_ID)
         val historyId = backups.startHistory(format.name, uri)
         return try {
-            val outcome = backups.export(uri, format) { done, total ->
+            val key = keyId?.let { keys.get(it) ?: throw KeyUnavailableException() }
+            val outcome = backups.export(uri, format, key) { done, total ->
                 setProgress(progress(BackupScheduler.OP_EXPORT, done, total))
             }
             backups.finishHistory(historyId, HistoryKind.COMPLETED, outcome.messageCount, outcome.sha256)
@@ -111,6 +117,8 @@ class BackupExportWorker @AssistedInject constructor(
             AppLog.w(TAG, "export failed", e)
             backups.finishHistory(historyId, HistoryKind.FAILED, 0)
             Result.failure(failure(BackupScheduler.OP_EXPORT, e))
+        } finally {
+            keyId?.let(keys::remove)
         }
     }
 
@@ -124,12 +132,14 @@ class BackupRestoreWorker @AssistedInject constructor(
     @Assisted context: Context,
     @Assisted params: WorkerParameters,
     private val backups: BackupRepository,
+    private val keys: EphemeralKeys,
 ) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
         backups.markInterrupted(emptyList())
         val uri = Uri.parse(inputData.getString(BackupScheduler.KEY_URI) ?: return Result.failure())
-        val kind = BackupKind.valueOf(inputData.getString(BackupScheduler.KEY_KIND) ?: BackupKind.SMS_BRIDGE_PACKAGE.name)
+        val keyId = inputData.getString(BackupScheduler.KEY_SECRET_ID)
+        val kind =BackupKind.valueOf(inputData.getString(BackupScheduler.KEY_KIND) ?: BackupKind.SMS_BRIDGE_PACKAGE.name)
         val options = RestoreOptions(
             target = RestoreTarget.valueOf(inputData.getString(BackupScheduler.KEY_TARGET) ?: RestoreTarget.ARCHIVE.name),
             includeIncoming = inputData.getBoolean(BackupScheduler.KEY_INCOMING, true),
@@ -140,7 +150,8 @@ class BackupRestoreWorker @AssistedInject constructor(
         val historyKind = if (options.target == RestoreTarget.PHONE) HistoryKind.RESTORE_PHONE else HistoryKind.RESTORE_ARCHIVE
         val historyId = backups.startHistory(historyKind, uri)
         return try {
-            val result = backups.restore(uri, kind, options) { read, restored ->
+            val key = keyId?.let { keys.get(it) ?: throw KeyUnavailableException() }
+            val result = backups.restore(uri, kind, options, key) { read, restored ->
                 setProgress(
                     progress(BackupScheduler.OP_RESTORE, read, 0)
                         .let { Data.Builder().putAll(it).putInt(BackupScheduler.KEY_RESTORED, restored).build() },
@@ -170,6 +181,8 @@ class BackupRestoreWorker @AssistedInject constructor(
             AppLog.w(TAG, "restore failed", e)
             backups.finishHistory(historyId, HistoryKind.FAILED, 0)
             Result.failure(failure(BackupScheduler.OP_RESTORE, e))
+        } finally {
+            keyId?.let(keys::remove)
         }
     }
 
@@ -188,7 +201,8 @@ private fun progress(operation: String, done: Int, total: Int) = workDataOf(
 private fun failure(operation: String, e: Exception) = workDataOf(
     BackupScheduler.KEY_OPERATION to operation,
     BackupScheduler.KEY_ERROR to when (e) {
-        is NotDefaultSmsAppException -> e.message
+        is NotDefaultSmsAppException, is KeyUnavailableException, is WrongPassphraseException, is InvalidBackupException -> e.message
+        is java.io.IOException -> "Reading or writing the file failed. If it is encrypted, it may be damaged."
         is java.io.FileNotFoundException -> "The file could not be opened. It may have been moved or deleted."
         is IllegalStateException -> e.message ?: e.javaClass.simpleName
         else -> e.javaClass.simpleName
