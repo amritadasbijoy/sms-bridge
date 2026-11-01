@@ -42,6 +42,7 @@ class NavigationRequests @Inject constructor() {
 object Routes {
     const val HOME = "home"
     const val MESSAGES = "messages"
+    const val BACKUP = "backup"
     const val SETTINGS = "settings"
     const val THREAD = "thread?key={key}"
     const val COMPOSE = "compose?to={to}&body={body}"

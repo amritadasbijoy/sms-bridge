@@ -37,4 +37,7 @@ enum class CaptureOrigin {
 
     /** Captured from the SMS_RECEIVED broadcast before the provider row was seen. */
     INCOMING_BROADCAST,
+
+    /** Imported from a backup file into the archive (not into the phone's SMS database). */
+    BACKUP_IMPORT,
 }

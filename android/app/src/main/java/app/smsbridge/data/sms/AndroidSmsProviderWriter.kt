@@ -84,6 +84,28 @@ class AndroidSmsProviderWriter @Inject constructor(
         updated
     }
 
+    /**
+     * Android assigns new `_id` and `thread_id` values; those are device-specific and cannot be
+     * preserved. The SIM (sub_id) is deliberately not written: the original subscription may not
+     * exist on this phone, and Android then treats the message as belonging to the default SIM.
+     */
+    override suspend fun insertRestored(records: List<RestoredSms>): Int = withContext(ioDispatcher) {
+        if (records.isEmpty()) return@withContext 0
+        val values = records.map { r ->
+            ContentValues().apply {
+                put(Telephony.Sms.ADDRESS, r.address)
+                put(Telephony.Sms.BODY, r.body)
+                put(Telephony.Sms.DATE, r.date)
+                put(Telephony.Sms.DATE_SENT, r.dateSent)
+                put(Telephony.Sms.TYPE, r.type.providerValue)
+                put(Telephony.Sms.READ, if (r.read) 1 else 0)
+                put(Telephony.Sms.SEEN, 1)
+                r.status?.let { put(Telephony.Sms.STATUS, it) }
+            }
+        }.toTypedArray()
+        guarded(0) { resolver.bulkInsert(Telephony.Sms.CONTENT_URI, values) }
+    }
+
     private suspend fun insert(uri: Uri, values: ContentValues): Long? = withContext(ioDispatcher) {
         guarded(null) { resolver.insert(uri, values)?.let(ContentUris::parseId)?.takeIf { it > 0 } }
     }

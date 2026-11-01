@@ -84,4 +84,20 @@ interface SmsProviderWriter {
     suspend fun updateDeliveryStatus(providerId: Long, status: Int): Boolean
 
     suspend fun markRead(providerIds: List<Long>): Int
+
+    /** Restores messages with their original box, timestamps and read state. Returns rows inserted. */
+    suspend fun insertRestored(records: List<RestoredSms>): Int
+}
+
+/** A message to write back into the phone's SMS database during a restore. */
+data class RestoredSms(
+    val address: String?,
+    val body: String,
+    val date: Long,
+    val dateSent: Long,
+    val type: SmsType,
+    val read: Boolean,
+    val status: Int?,
+) {
+    override fun toString(): String = "RestoredSms(type=$type, date=$date)"
 }

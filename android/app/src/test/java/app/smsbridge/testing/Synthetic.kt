@@ -3,6 +3,7 @@ package app.smsbridge.testing
 import app.smsbridge.core.model.SmsType
 import app.smsbridge.data.sms.IncomingSms
 import app.smsbridge.data.sms.ProviderSms
+import app.smsbridge.data.sms.RestoredSms
 import app.smsbridge.data.sms.SmsPage
 import app.smsbridge.data.sms.SmsProviderWriter
 import app.smsbridge.data.sms.SmsScanQuery
@@ -97,6 +98,15 @@ class FakeSmsProviderWriter(private val source: FakeSmsSource) : SmsProviderWrit
         if (!isDefaultApp || row == null) return false
         source.put(row.copy(status = status))
         return true
+    }
+
+    override suspend fun insertRestored(records: List<RestoredSms>): Int {
+        if (!isDefaultApp) return 0
+        records.forEach { r ->
+            val id = nextId()
+            source.put(ProviderSms(id, 1, r.address, r.body, r.date, r.dateSent, r.type, r.read, true, null, r.status, null))
+        }
+        return records.size
     }
 
     override suspend fun markRead(providerIds: List<Long>): Int {

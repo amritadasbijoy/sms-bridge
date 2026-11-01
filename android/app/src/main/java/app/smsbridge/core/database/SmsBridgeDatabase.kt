@@ -8,6 +8,7 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import app.smsbridge.core.model.AddressKey
 import app.smsbridge.core.database.dao.AppSettingDao
+import app.smsbridge.core.database.dao.BackupHistoryDao
 import app.smsbridge.core.database.dao.DeviceDao
 import app.smsbridge.core.database.dao.SmsMessageDao
 import app.smsbridge.core.database.dao.SyncCheckpointDao
@@ -45,6 +46,7 @@ abstract class SmsBridgeDatabase : RoomDatabase() {
     abstract fun syncCheckpointDao(): SyncCheckpointDao
     abstract fun deviceDao(): DeviceDao
     abstract fun appSettingDao(): AppSettingDao
+    abstract fun backupHistoryDao(): BackupHistoryDao
 
     companion object {
         const val NAME = "sms_bridge.db"

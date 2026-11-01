@@ -128,6 +128,56 @@ delivery intent is mutable (telephony attaches the report PDU) and explicit.
 Threads are grouped by `address_key` (schema v2), not by provider `thread_id`. The key is
 device-independent and also covers archived rows that are no longer in the provider.
 
+## Backup, export and restore (Phase 3)
+
+All file access goes through the Storage Access Framework: the user picks every destination and
+source. Export and restore run as one unique WorkManager job (`backup-restore`) with progress,
+recorded in `backup_history` (RUNNING → COMPLETED / FAILED / INTERRUPTED).
+
+### Backup package (`sms-bridge-backup-YYYY-MM-DD-HHmm.zip`)
+
+| Entry | Content |
+|---|---|
+| `messages.xml` | `<smses count backup_set backup_date smsbridge_format><sms …/></smses>`, the layout used by common SMS backup tools, plus `seen`, `sb_id` (archive UUID), `sb_source_device` |
+| `metadata.json` | backup id, time, app version, source device id/name, SDK, time zone, counts, date range |
+| `manifest.json` | `format`, `formatVersion` (1), `databaseSchemaVersion`, `messageCount`, files with SHA-256 and size |
+| `checksums.sha256` | `sha256sum -c` compatible lines for the three entries above |
+
+- **Streaming:** the export pages the archive by SQLite `rowid` (1,000 per page) up to a `MAX(rowid)`
+  snapshot, so messages arriving mid-export are neither half-included nor miscounted. Hashes
+  are computed while writing.
+- **Lossless XML:** newlines and tabs in attributes are written as character references (parsers
+  would otherwise turn them into spaces); XML-illegal control characters become numeric references.
+  The round trip is tested with Bangla, emoji, quotes and control characters.
+
+### JSON and CSV
+
+These are reading formats, not restore formats. CSV is UTF-8 with a BOM (so Excel shows Bangla)
+and quoted per RFC 4180. Cells beginning with `= + - @` get a leading apostrophe against
+spreadsheet formula injection.
+
+### Validation (`inspectBackup`)
+
+Reads the whole file once and changes nothing:
+- Packages: every entry is hashed and compared with `checksums.sha256` and `manifest.json`, and
+  the message count is checked.
+- Plain XML from other tools: parsed and counted. `"null"` placeholders are understood; `<mms>`
+  and unreadable rows are counted as skipped.
+
+The user sees counts, date range, source device and checksum state before choosing anything.
+
+### Restore (`RestoreEngine`)
+
+Selective by direction and by date range. There are two targets:
+
+| Target | Needs | Duplicate check | Notes |
+|---|---|---|---|
+| SMS Bridge archive | nothing | archive fingerprints | Keeps `sb_source_device`; queues `SMS_IMPORTED` events |
+| Phone's SMS database | SMS role (guided temporary switch) | fingerprints of every provider row, plus within the file | `bulkInsert` in 250-row batches; Android assigns new `_id`/`thread_id`; `sub_id` not written; OUTBOX/QUEUED restored as FAILED so nothing is re-sent; then a reconcile pulls the rows into the archive |
+
+Re-running an interrupted restore is safe (everything already present is skipped). An
+interrupted export leaves a package without a manifest, which validation rejects.
+
 ## Local database (Room, schema v2)
 
 | Table | Purpose |

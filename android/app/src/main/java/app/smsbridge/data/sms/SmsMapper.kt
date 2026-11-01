@@ -19,7 +19,47 @@ data class IncomingSms(
     override fun toString(): String = "IncomingSms(receivedAt=$receivedAt, bodyLength=${body.length})"
 }
 
+/** A message entering the archive from a backup file. */
+data class ImportedSms(
+    val address: String?,
+    val body: String,
+    val date: Long,
+    val dateSent: Long,
+    val type: SmsType,
+    val read: Boolean,
+    val seen: Boolean,
+    val status: Int?,
+    val subscriptionId: Int?,
+    /** Device that originally captured it, when the backup says so; preserved as-is. */
+    val sourceDeviceId: String?,
+) {
+    override fun toString(): String = "ImportedSms(type=$type, date=$date)"
+}
+
 object SmsMapper {
+
+    fun newFromImport(sms: ImportedSms, id: String, now: Long): SmsMessageEntity = SmsMessageEntity(
+        id = id,
+        providerId = null,
+        threadId = null,
+        address = sms.address,
+        body = sms.body,
+        date = sms.date,
+        dateSent = sms.dateSent,
+        type = sms.type,
+        read = sms.read,
+        seen = sms.seen,
+        subscriptionId = sms.subscriptionId,
+        status = sms.status,
+        errorCode = null,
+        sourceDeviceId = sms.sourceDeviceId,
+        fingerprint = SmsFingerprint.compute(sms.address, sms.body, sms.date, sms.dateSent, sms.type),
+        contentKey = SmsFingerprint.contentKey(sms.address, sms.body, sms.type),
+        origin = CaptureOrigin.BACKUP_IMPORT,
+        createdAt = now,
+        updatedAt = now,
+        addressKey = AddressKey.of(sms.address),
+    )
 
     fun newFromProvider(sms: ProviderSms, id: String, sourceDeviceId: String, now: Long): SmsMessageEntity =
         SmsMessageEntity(

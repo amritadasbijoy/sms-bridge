@@ -150,6 +150,33 @@ class SmsRepository @Inject constructor(
         return unread.size
     }
 
+    // ---- Backup import (Phase 3) ---------------------------------------------------------------
+
+    /**
+     * Adds messages from a backup to the archive only (the phone's SMS database is untouched).
+     * Messages whose fingerprint is already archived are skipped, so re-running an interrupted
+     * import is safe. Returns the number inserted.
+     */
+    suspend fun importToArchive(items: List<ImportedSms>, emitSyncEvents: Boolean): Int {
+        if (items.isEmpty()) return 0
+        return writeLock.withLock {
+            db.withTransaction {
+                val now = time.nowMillis()
+                var inserted = 0
+                for (item in items) {
+                    val entity = SmsMapper.newFromImport(item, UUID.randomUUID().toString(), now)
+                    if (dao.findByFingerprint(entity.fingerprint) != null) continue
+                    dao.insert(entity)
+                    if (emitSyncEvents) pendingSync.enqueue(entity.id, SyncEventType.SMS_IMPORTED)
+                    inserted++
+                }
+                inserted
+            }
+        }
+    }
+
+    suspend fun archiveFingerprintExists(fingerprint: String): Boolean = dao.findByFingerprint(fingerprint) != null
+
     private suspend fun upsertOne(sms: ProviderSms, emit: Boolean): String {
         val deviceId = devices.localDeviceId()
         return writeLock.withLock {
