@@ -93,6 +93,8 @@ dependencies {
     implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.androidx.paging.compose)
     implementation(libs.kotlinx.coroutines.android)
+    // Streaming AEAD for encrypted backups (reviewed implementation, no custom crypto).
+    implementation(libs.tink.android)
 
     testImplementation(libs.junit)
     testImplementation(libs.robolectric)

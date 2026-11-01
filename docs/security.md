@@ -48,9 +48,24 @@ brute-forced from a bare hash, so they must never be sent to the server unencryp
 | CSV formula-injection guard | `SmsCsvWriter` |
 | Error texts shown to the user are built from our own messages or exception class names only | `BackupWorkers` |
 
-**Backup files are NOT encrypted in Phase 3.** The UI says so next to the button. Anyone with the
-file can read the messages. Encrypted packages (AES-256-GCM, key from a passphrase via Argon2id
-or a Keystore-wrapped key) are Phase 4.
+## Phase 4a: encrypted backups
+
+Since Phase 4a, "Create encrypted backup" is the primary option. Unencrypted packages, JSON and
+CSV remain available and are labelled as readable by anyone who gets the file.
+
+| Aspect | Design |
+|---|---|
+| Cipher | Google Tink `AesGcmHkdfStreaming`: AES-256-GCM, HKDF-SHA256 per-file key and nonce prefix, 1 MiB authenticated segments. Detects modification, reordering and truncation. No custom crypto. |
+| Key derivation | PBKDF2-HMAC-SHA256, 600,000 iterations, 16-byte random salt (built into Android). Iterations stored in the header, accepted range 100k–10M (no weak or denial-of-service headers). |
+| Header binding | The whole header (`SBENC`, version, KDF id, iterations, salt) is Tink's associated data |
+| Passphrase | Min 10 characters, entered twice, never stored or logged. The `CharArray` and `PBEKeySpec` are wiped after derivation. |
+| Key lifetime | The derived key lives only in `EphemeralKeys` (memory). WorkManager jobs get an opaque id, because WorkManager persists inputs to disk. Keys are wiped when the job ends or the screen is left; process death loses them (the user re-enters the passphrase). |
+| Wrong passphrase | Fails authentication on the first segment ("Wrong passphrase, or the file is damaged"); never produces garbage plaintext |
+
+Known limitations:
+- Compose `TextField` holds the passphrase as an immutable `String` while typing, which cannot be wiped.
+- PBKDF2 is less resistant to GPU attacks than Argon2id. Use a long passphrase; Argon2id is a candidate once a reviewed Android implementation is adopted.
+- There is no recovery: a forgotten passphrase means the backup cannot be opened. This is by design, and the UI says so.
 
 ### Known Phase 1 gaps
 

@@ -150,6 +150,18 @@ recorded in `backup_history` (RUNNING → COMPLETED / FAILED / INTERRUPTED).
   would otherwise turn them into spaces); XML-illegal control characters become numeric references.
   The round trip is tested with Bangla, emoji, quotes and control characters.
 
+### Encrypted backup (`.sbbackup`, Phase 4a)
+
+```
+"SBENC" | version=1 | kdf=1 (PBKDF2-HMAC-SHA256) | iterations u32 BE | saltLen | salt
+Tink AesGcmHkdfStreaming( ikm = PBKDF2(passphrase, salt, iterations, 256 bit), AAD = header )
+  └─ plaintext: the unchanged backup package zip (messages.xml, metadata.json, manifest.json, checksums.sha256)
+```
+
+Validation and restore run the Phase 3 code on the decrypted stream, so checksums and counts
+are verified as before. `BackupRepository.probe()` reads only the header to decide whether to
+ask for a passphrase.
+
 ### JSON and CSV
 
 These are reading formats, not restore formats. CSV is UTF-8 with a BOM (so Excel shows Bangla)
