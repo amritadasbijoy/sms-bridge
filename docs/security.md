@@ -121,9 +121,11 @@ Known limitations:
 | XSS | Message text is rendered as React text (no HTML). CSP `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'`, verified with no violations in normal use. |
 | Scope | Read-only: no send, delete or edit endpoints are used. |
 
-Limitation: a browser unlocks with the recovery key, so anyone holding the recovery key *and* the
-sign-in can read messages. Approving a browser from a phone with a safety code (no recovery key) is
-planned. Ed25519 event signatures are verified by the server, not yet in the browser (they only
+| Browser approval | A browser registers its own X25519 key (generated **non-extractable**, kept in IndexedDB per account) as a `web` device. A trusted phone compares the 6-digit safety code and wraps the vault key for it with HPKE, bound to the browser's device id and key version. Later visits unlock automatically. Revoking it (Devices page or "Forget this browser") stops it at once; at most 5 browsers may wait for approval. |
+| Accounts | Registration is closed after the first account; one-time invite codes (7 days, hashed, consumed in the registration transaction) admit one person each. Each account has its own vault. |
+
+Trade-off: an approved browser opens messages with only the account sign-in, so treat it like an
+unlocked phone (forget it on shared computers). The recovery key remains as a fallback. Ed25519 event signatures are verified by the server, not yet in the browser (they only
 distinguish devices that already hold the vault key).
 
 Known limitations (server): passwords pass through an immutable JVM

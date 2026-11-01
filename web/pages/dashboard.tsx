@@ -37,7 +37,7 @@ export default function Dashboard() {
       threads: conversations(m).length,
     };
   }, [store]);
-  const active = devices?.filter((d) => !d.revokedAt) ?? [];
+  const active = devices?.filter((d) => !d.revokedAt && d.platform !== "web") ?? [];
   const ready = vault.status === "ready";
 
   return (

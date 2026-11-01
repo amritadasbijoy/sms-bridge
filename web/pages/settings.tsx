@@ -1,5 +1,5 @@
 import QRCode from "qrcode";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Shell } from "@/components/shell";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input, Label } from "@/components/ui/input";
 import { api, ApiError } from "@/lib/api";
 import { useSession } from "@/lib/session";
+import { formatDateTime } from "@/lib/utils";
 
 function TwoFactor() {
   const { me, refreshMe } = useSession();
@@ -110,13 +111,92 @@ function TwoFactor() {
   );
 }
 
+function Invites() {
+  const [list, setList] = useState<{ createdAt: string; expiresAt: string; used: boolean; usedAt: string | null }[]>([]);
+  const [code, setCode] = useState<{ code: string; expiresAt: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const load = () => {
+    api.invites().then(setList, () => {});
+  };
+  useEffect(load, []);
+
+  async function create() {
+    setError(null);
+    try {
+      setCode(await api.createInvite());
+      load();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Could not create an invite.");
+    }
+  }
+
+  const open = list.filter((i) => !i.used && new Date(i.expiresAt) > new Date()).length;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Invite someone</CardTitle>
+        <CardDescription>
+          Sign-up is closed. An invite code lets one person create their own account (with their own phones and messages,
+          separate from yours). Codes work once and expire after 7 days.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {code && (
+          <div className="rounded-md border bg-muted px-4 py-3">
+            <p className="font-mono text-2xl tracking-widest">{code.code}</p>
+            <p className="text-xs text-muted-foreground">
+              Send this with the address {typeof window !== "undefined" ? window.location.origin : ""}. They choose
+              &quot;I have an invite code&quot; on the sign-in page. Expires {formatDateTime(code.expiresAt)}.
+            </p>
+          </div>
+        )}
+        {error && <Alert tone="error">{error}</Alert>}
+        <Button onClick={create}>{code ? "Create another" : "Create invite code"}</Button>
+        <p className="text-xs text-muted-foreground">
+          {list.length === 0 ? "No invites yet." : `${list.filter((i) => i.used).length} used · ${open} waiting`}
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ThisBrowser() {
+  const { forgetBrowser } = useSession();
+  const [confirm, setConfirm] = useState(false);
+  const [done, setDone] = useState(false);
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>This browser</CardTitle>
+        <CardDescription>
+          Once a phone approves this browser, it opens your messages without the recovery key. Forget it on shared or
+          lost computers: its key is deleted and it must be approved again.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {done && <Alert>This browser was forgotten and revoked.</Alert>}
+        {confirm ? (
+          <div className="flex items-center gap-2">
+            <Button variant="destructive" onClick={() => void forgetBrowser().then(() => { setDone(true); setConfirm(false); })}>
+              Forget this browser
+            </Button>
+            <Button variant="ghost" onClick={() => setConfirm(false)}>Cancel</Button>
+          </div>
+        ) : (
+          <Button variant="outline" onClick={() => setConfirm(true)}>Forget this browser…</Button>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function Browsers() {
   const [confirm, setConfirm] = useState(false);
   const [done, setDone] = useState(false);
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Remembered browsers</CardTitle>
+        <CardTitle>Remembered sign-ins</CardTitle>
         <CardDescription>Browsers that passed two-factor sign-in skip the code for 90 days.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -140,6 +220,8 @@ export default function Settings() {
   return (
     <Shell title="Settings">
       <div className="max-w-2xl space-y-6">
+        <Invites />
+        <ThisBrowser />
         <TwoFactor />
         <Browsers />
         <Card>
@@ -152,9 +234,8 @@ export default function Settings() {
               messages.
             </p>
             <p>
-              A browser reads messages by unlocking the vault with your recovery key, in memory only. Anyone with your
-              recovery key and your sign-in can read your messages, so keep it offline. Approving a browser from your phone
-              with a safety code, without typing the recovery key, is planned.
+              A browser reads messages only after one of your phones approves it (matching safety codes) or after you
+              enter the recovery key. Decryption happens in the browser; the server never sees your messages.
             </p>
           </CardContent>
         </Card>
