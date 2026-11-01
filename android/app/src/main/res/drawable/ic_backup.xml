@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Archive box: navigation icon for the Backup tab. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M3,3h18v5H3z M4,9h16v11a1,1 0,0 1,-1 1H5a1,1 0,0 1,-1 -1z M9,12v2h6v-2z" />
+</vector>

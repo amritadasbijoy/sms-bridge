@@ -6,6 +6,8 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Update
+import androidx.room.Upsert
+import app.smsbridge.core.database.entity.BackupHistoryEntity
 import app.smsbridge.core.database.entity.SmsMessageEntity
 import kotlinx.coroutines.flow.Flow
 
@@ -112,4 +114,36 @@ interface SmsMessageDao {
 
     @Query("SELECT * FROM sms_messages WHERE address_key = :addressKey AND type = 'INBOX' AND read = 0")
     suspend fun unreadInThread(addressKey: String): List<SmsMessageEntity>
+
+    // ---- Export (Phase 3): keyset pagination on SQLite's rowid gives a stable snapshot ----
+
+    @Query("SELECT MAX(rowid) FROM sms_messages")
+    suspend fun maxRowId(): Long?
+
+    @Query("SELECT COUNT(*) FROM sms_messages WHERE rowid <= :maxRowId")
+    suspend fun countUpTo(maxRowId: Long): Int
+
+    @Query("SELECT rowid AS rowId, * FROM sms_messages WHERE rowid > :afterRowId AND rowid <= :maxRowId ORDER BY rowid LIMIT :limit")
+    suspend fun exportPage(afterRowId: Long, maxRowId: Long, limit: Int): List<ExportRow>
+}
+
+data class ExportRow(
+    val rowId: Long,
+    @androidx.room.Embedded val message: SmsMessageEntity,
+)
+
+@Dao
+interface BackupHistoryDao {
+    @Upsert
+    suspend fun upsert(entry: BackupHistoryEntity)
+
+    @Query("SELECT * FROM backup_history WHERE id = :id")
+    suspend fun get(id: String): BackupHistoryEntity?
+
+    @Query("SELECT * FROM backup_history ORDER BY created_at DESC LIMIT :limit")
+    fun observeRecent(limit: Int): Flow<List<BackupHistoryEntity>>
+
+    /** Operations still RUNNING when the process died are marked INTERRUPTED. */
+    @Query("UPDATE backup_history SET status = 'INTERRUPTED' WHERE status = 'RUNNING' AND id NOT IN (:activeIds)")
+    suspend fun markInterrupted(activeIds: List<String>): Int
 }

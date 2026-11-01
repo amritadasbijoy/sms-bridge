@@ -24,6 +24,10 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import androidx.annotation.DrawableRes
+import androidx.compose.ui.res.painterResource
+import app.smsbridge.R
+import app.smsbridge.feature.backup.BackupScreen
 import app.smsbridge.feature.dashboard.DashboardScreen
 import app.smsbridge.feature.messages.ComposeScreen
 import app.smsbridge.feature.messages.MessagesScreen
@@ -34,9 +38,10 @@ import app.smsbridge.feature.settings.SettingsScreen
  * Top-level destinations. Backup, Transfer, Sync and Devices tabs are added in the phases that
  * implement them, so the app never shows a tab that does nothing.
  */
-enum class TopDestination(val route: String, val label: String, val icon: ImageVector) {
+enum class TopDestination(val route: String, val label: String, val icon: ImageVector?, @DrawableRes val iconRes: Int? = null) {
     HOME(Routes.HOME, "Home", Icons.Filled.Home),
     MESSAGES(Routes.MESSAGES, "Messages", Icons.Filled.Email),
+    BACKUP(Routes.BACKUP, "Backup", null, R.drawable.ic_backup),
     SETTINGS(Routes.SETTINGS, "Settings", Icons.Filled.Settings),
 }
 
@@ -64,7 +69,11 @@ fun SmsBridgeRoot(navigationRequests: NavigationRequests) {
                         NavigationBarItem(
                             selected = currentRoute == destination.route,
                             onClick = { navController.navigateTopLevel(destination.route) },
-                            icon = { Icon(destination.icon, contentDescription = null) },
+                            icon = {
+                                val res = destination.iconRes
+                                if (res != null) Icon(painterResource(res), contentDescription = null)
+                                else Icon(destination.icon!!, contentDescription = null)
+                            },
                             label = { Text(destination.label) },
                         )
                     }
@@ -86,6 +95,7 @@ fun SmsBridgeRoot(navigationRequests: NavigationRequests) {
                     onCompose = { navController.navigate(Routes.compose()) },
                 )
             }
+            composable(Routes.BACKUP) { BackupScreen() }
             composable(Routes.SETTINGS) { SettingsScreen() }
             composable(
                 Routes.THREAD,

@@ -37,6 +37,21 @@ brute-forced from a bare hash, so they must never be sent to the server unencryp
 | Sending is unavailable unless SMS Bridge is the default app | `SmsSender`, UI |
 | `ComposeRequest.toString()` redacted (tested) | `ComposeRequest` |
 
+## Phase 3 controls (backup and restore)
+
+| Control | Where |
+|---|---|
+| Files only through user-picked SAF documents; no broad storage permission | `BackupScreen`, `BackupRepository` |
+| Restore is preceded by full validation (checksums, manifest, counts) and an explicit confirmation | `inspectBackup`, `RestorePlanner` |
+| Restores never delete or overwrite; duplicates skipped; pending outgoing restored as FAILED (never re-sent) | `RestoreEngine` |
+| Restoring into the phone requires the SMS role through the same explained opt-in flow | `RestorePlanner` |
+| CSV formula-injection guard | `SmsCsvWriter` |
+| Error texts shown to the user are built from our own messages or exception class names only | `BackupWorkers` |
+
+**Backup files are NOT encrypted in Phase 3.** The UI says so next to the button. Anyone with the
+file can read the messages. Encrypted packages (AES-256-GCM, key from a passphrase via Argon2id
+or a Keystore-wrapped key) are Phase 4.
+
 ### Known Phase 1 gaps
 
 - The local database is not encrypted at rest beyond Android's file-based encryption and app
