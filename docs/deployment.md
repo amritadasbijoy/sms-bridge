@@ -58,7 +58,7 @@ Production runs on the owner's VPS (Ubuntu 24.04, Docker 29) next to other servi
 | Containers | `db`, `api` (127.0.0.1:8080), `web` (127.0.0.1:8081); `docker compose up -d db api web` |
 | `.env` | generated on the server (random DB password), mode 600, `COOKIE_SECURE=true`, `TRUST_PROXY=true`, registration closed |
 | Public entry | host Caddy site `sms.techistbd.com`: `/api/*` and `/health` → 8080, everything else → 8081 |
-| Sign-up | `/api/v1/auth/register` answered 403 by Caddy; the owner account is created once through an SSH tunnel |
+| Sign-up | Closed by the server; friends join with one-time invite codes from Settings (the proxy no longer blocks the path) |
 | Backups | root cron 03:15 → `/var/backups/smsbridge` (encrypted, 14 kept), passphrase `/root/.smsbridge-backup-pass` |
 
 Host Caddy site (in `/etc/caddy/Caddyfile`, backed up before each change):
@@ -67,11 +67,6 @@ Host Caddy site (in `/etc/caddy/Caddyfile`, backed up before each change):
 sms.techistbd.com {
 	encode zstd gzip
 	header Strict-Transport-Security "max-age=31536000"
-	# handle blocks are exclusive and tried in order: sign-up is closed publicly.
-	handle /api/v1/auth/register {
-		header Content-Type application/json
-		respond `{"error":"registration_closed","message":"Registration is closed on this server."}` 403
-	}
 	@api path /api/* /health
 	handle @api {
 		reverse_proxy 127.0.0.1:8080
