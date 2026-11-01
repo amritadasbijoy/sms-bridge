@@ -90,6 +90,17 @@ Update: on the Mac, `cd backend && ./gradlew installDist`, then package with
 unpack over `/opt/sms-bridge` (keeps `infrastructure/.env`), and run
 `docker compose up -d --build api web` there.
 
+### Tester APK downloads
+
+`https://sms.techistbd.com/download/sms-bridge.apk` (latest) and `sms-bridge-<version>.apk`, served by
+the host Caddy from `/opt/sms-bridge-downloads` (with a `.sha256` file). These are **debug-signed**
+builds (`app.smsbridge.debug`) signed with the Mac's `~/.android/debug.keystore`: updates only install
+over earlier ones if they are built with the same keystore, so keep a backup of that file.
+
+Publish a new build: raise `versionCode`/`versionName` in `android/app/build.gradle.kts`, run
+`./gradlew :app:assembleDebug`, copy the APK to `/opt/sms-bridge-downloads/sms-bridge-<version>.apk`
+and over `sms-bridge.apk`, and regenerate the `.sha256`.
+
 ## Backups
 
 ```bash

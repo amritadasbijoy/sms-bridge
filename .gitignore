@@ -26,3 +26,4 @@ signing.properties
 # Node (web/, later phases)
 node_modules/
 .next/
+dist/
