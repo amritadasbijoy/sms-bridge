@@ -85,4 +85,7 @@ interface AppSettingDao {
 
     @Upsert
     suspend fun put(setting: AppSettingEntity)
+
+    @Query("DELETE FROM app_settings WHERE `key` LIKE :prefix || '%'")
+    suspend fun deletePrefix(prefix: String)
 }
