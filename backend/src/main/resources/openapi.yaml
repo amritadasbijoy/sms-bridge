@@ -1,10 +1,12 @@
 openapi: 3.0.3
 info:
   title: SMS Bridge server
-  version: 0.1.0
+  version: 0.3.0
   description: |
-    Self-hosted SMS Bridge API (Phase 5: accounts, sessions, device registration).
-    The server never receives message content in plaintext (sync arrives in Phase 6, encrypted on the phone).
+    Self-hosted SMS Bridge API: accounts, sessions, two-factor sign-in, device registration,
+    the end-to-end encrypted vault and sync log. The server never receives message content in
+    plaintext; events are encrypted on the phone and decrypted only by trusted devices or a browser
+    that unlocked the vault locally with the recovery key.
 
     Browser/API sessions use the HttpOnly `sb_session` cookie. Every cookie-authenticated request
     other than GET must send `X-Requested-With: SmsBridge` (CSRF defence).
@@ -33,11 +35,44 @@ components:
       properties:
         username: { type: string, pattern: '^[A-Za-z0-9._-]{3,64}$' }
         password: { type: string, minLength: 12, maxLength: 256 }
+        totp: { type: string, nullable: true, description: 6-digit authenticator code; needed when 2FA is on and this browser is not remembered }
     Me:
       type: object
       properties:
         userId: { type: string, format: uuid }
         username: { type: string }
+        totpEnabled: { type: boolean }
+    TotpSetup:
+      type: object
+      properties:
+        secret: { type: string, description: Base32 secret. Shown once; also encoded in otpauthUri. }
+        otpauthUri: { type: string }
+    WrappedKey:
+      type: object
+      properties:
+        keyVersion: { type: integer }
+        wrappedKey: { type: string, format: byte }
+    BrowserVault:
+      type: object
+      properties:
+        exists: { type: boolean }
+        currentVersion: { type: integer, nullable: true }
+        recoveryKeys: { type: array, items: { $ref: '#/components/schemas/WrappedKey' }, description: Vault keys wrapped with the recovery key (useless without it) }
+    StoredEvent:
+      type: object
+      properties:
+        eventId: { type: string, format: uuid }
+        deviceId: { type: string, format: uuid }
+        deviceSequence: { type: integer, format: int64 }
+        serverSequence: { type: integer, format: int64 }
+        keyVersion: { type: integer }
+        ciphertext: { type: string, format: byte, description: nonce(12) || AES-256-GCM ciphertext }
+        signature: { type: string, format: byte, description: Ed25519 by the sending device }
+    EventsPage:
+      type: object
+      properties:
+        events: { type: array, items: { $ref: '#/components/schemas/StoredEvent' } }
+        latest: { type: integer, format: int64 }
     PairingCode:
       type: object
       properties:
@@ -66,6 +101,9 @@ components:
         createdAt: { type: string, format: date-time }
         lastSeenAt: { type: string, format: date-time, nullable: true }
         revokedAt: { type: string, format: date-time, nullable: true }
+        vaultTrusted: { type: boolean }
+  parameters:
+    csrf: { in: header, name: X-Requested-With, required: true, schema: { type: string, enum: [SmsBridge] } }
   responses:
     Error:
       description: Error
@@ -99,10 +137,14 @@ paths:
   /api/v1/auth/login:
     post:
       summary: Sign in. Rate limited (10/minute per address).
+      description: |
+        With 2FA on, a browser without a valid `sb_browser` cookie gets 401 `totp_required` (only after
+        the password was correct); it then repeats the request with `totp`. Each code works once. A
+        successful code sets `sb_browser` (HttpOnly, 90 days) so this browser is not asked again.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/Credentials' } } } }
       responses:
         '200': { description: Signed in; sets the session cookie, content: { application/json: { schema: { $ref: '#/components/schemas/Me' } } } }
-        '401': { $ref: '#/components/responses/Error' }
+        '401': { description: invalid_credentials or totp_required, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '429': { description: Too many attempts }
   /api/v1/auth/logout:
     post:
@@ -156,3 +198,111 @@ paths:
       responses:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Device' } } } }
         '401': { $ref: '#/components/responses/Error' }
+  /api/v1/auth/totp/setup:
+    post:
+      summary: Start 2FA setup; returns a new secret (not active until enabled)
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/csrf' }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/TotpSetup' } } } }
+        '409': { $ref: '#/components/responses/Error' }
+  /api/v1/auth/totp/enable:
+    post:
+      summary: Turn 2FA on by proving the authenticator works
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/csrf' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [code], properties: { code: { type: string } } } } } }
+      responses:
+        '204': { description: Enabled }
+        '400': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /api/v1/auth/totp/disable:
+    post:
+      summary: Turn 2FA off (needs the password and a fresh code); forgets all browsers
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/csrf' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [password, code], properties: { password: { type: string }, code: { type: string } } } } } }
+      responses:
+        '204': { description: Disabled }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+  /api/v1/auth/browsers/forget:
+    post:
+      summary: Forget every remembered browser; each must enter a code at its next sign-in
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/csrf' }]
+      responses:
+        '204': { description: Done }
+  /api/v1/vault/browser:
+    get:
+      summary: Recovery-wrapped vault keys for a signed-in browser to unlock locally
+      security: [{ session: [] }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/BrowserVault' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+  /api/v1/vault:
+    get:
+      summary: Vault status for the calling device
+      security: [{ device: [] }]
+      responses:
+        '200': { description: OK }
+  /api/v1/vault/init:
+    post:
+      summary: Create the vault (first device); uploads recovery- and self-wrapped keys
+      security: [{ device: [] }]
+      responses:
+        '201': { description: Created }
+        '409': { $ref: '#/components/responses/Error' }
+  /api/v1/vault/keys:
+    get:
+      summary: Vault keys wrapped for the calling device (HPKE)
+      security: [{ device: [] }]
+      responses:
+        '200': { description: OK }
+  /api/v1/vault/recovery:
+    get:
+      summary: Recovery-wrapped vault keys (the device unlocks them with the recovery key)
+      security: [{ device: [] }]
+      responses:
+        '200': { description: OK }
+  /api/v1/vault/recovered:
+    post:
+      summary: After a recovery-key unlock, store keys wrapped for this device
+      security: [{ device: [] }]
+      responses:
+        '204': { description: Stored }
+  /api/v1/vault/requests:
+    get:
+      summary: Devices waiting for approval (with their public keys for the safety code)
+      security: [{ device: [] }]
+      responses:
+        '200': { description: OK }
+  /api/v1/vault/requests/{id}/approve:
+    post:
+      summary: A trusted device approves another by uploading keys wrapped for it
+      security: [{ device: [] }]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '204': { description: Approved }
+        '404': { $ref: '#/components/responses/Error' }
+  /api/v1/sync/events:
+    post:
+      summary: Upload encrypted, signed events (idempotent by eventId)
+      security: [{ device: [] }]
+      responses:
+        '200': { description: Acknowledged with server sequence numbers }
+    get:
+      summary: Page through encrypted events (trusted device or signed-in browser)
+      security: [{ device: [] }, { session: [] }]
+      parameters:
+        - { in: query, name: after, schema: { type: integer, format: int64, default: 0 } }
+        - { in: query, name: limit, schema: { type: integer, default: 500 } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/EventsPage' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+  /api/v1/sync/stream:
+    get:
+      summary: WebSocket; sends {"latest":n} whenever new events arrive
+      security: [{ device: [] }, { session: [] }]
+      responses:
+        '101': { description: Switching protocols }
