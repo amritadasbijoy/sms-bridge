@@ -91,13 +91,32 @@ fun DashboardScreen(
             }
         }
 
-        if (permissions.canReadSms && !permissions.isDefaultSmsApp) {
+        if (permissions.isDefaultSmsApp) {
+            item {
+                SectionCard("Default SMS app mode") {
+                    Text(
+                        "SMS Bridge receives, stores and sends your text messages. MMS (picture and group " +
+                            "messages) is not supported.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    if (!permissions.canPostNotifications) {
+                        Text(
+                            "Notifications are off: you will not be alerted to new messages. Turn them on in Settings.",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(top = 8.dp),
+                        )
+                    }
+                }
+            }
+        } else if (permissions.canReadSms) {
             item {
                 SectionCard("Backup-only mode") {
                     Text(
                         "SMS Bridge works alongside your usual messaging app. New incoming messages are " +
                             "saved as they arrive. Messages you send from another app are picked up by " +
-                            "background scans, which Android may delay, so they can appear here later.",
+                            "background scans, which Android may delay, so they can appear here later. " +
+                            "To send from SMS Bridge, make it your default SMS app in Settings.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }
@@ -118,7 +137,7 @@ fun DashboardScreen(
                 Text(message, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         } else {
-            items(state.conversations, key = { it.address ?: "" }) { ConversationRow(it) }
+            items(state.conversations, key = { it.addressKey }) { ConversationRow(it) }
         }
 
         item {

@@ -4,10 +4,14 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import app.smsbridge.core.common.ApplicationScope
+import app.smsbridge.data.notifications.MessageNotifier
+import app.smsbridge.data.sms.AndroidSmsProviderWriter
 import app.smsbridge.data.sms.SmsContentObserver
 import app.smsbridge.data.sms.SmsContentProvider
 import app.smsbridge.data.sms.SmsPermissionManager
+import app.smsbridge.data.sms.SmsProviderWriter
 import app.smsbridge.data.sms.SmsRepository
+import app.smsbridge.data.sms.SmsSender
 import app.smsbridge.data.sms.SmsSource
 import app.smsbridge.data.sync.SyncScheduler
 import dagger.Binds
@@ -48,6 +52,8 @@ interface ReceiverEntryPoint {
     fun smsRepository(): SmsRepository
     fun syncScheduler(): SyncScheduler
     fun captureCoordinator(): SmsCaptureCoordinator
+    fun messageNotifier(): MessageNotifier
+    fun smsSender(): SmsSender
 
     @ApplicationScope
     fun applicationScope(): CoroutineScope
@@ -70,4 +76,7 @@ class BootReceiver : BroadcastReceiver() {
 abstract class SmsDataModule {
     @Binds
     abstract fun bindSmsSource(impl: SmsContentProvider): SmsSource
+
+    @Binds
+    abstract fun bindSmsProviderWriter(impl: AndroidSmsProviderWriter): SmsProviderWriter
 }

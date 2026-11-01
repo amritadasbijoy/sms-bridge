@@ -26,7 +26,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import app.smsbridge.core.database.entity.DeviceEntity
+import app.smsbridge.data.background.SmsCaptureCoordinator
 import app.smsbridge.data.settings.AppSettingsRepository
+import app.smsbridge.feature.permissions.DefaultSmsAppCard
 import app.smsbridge.data.settings.LocalDeviceRepository
 import app.smsbridge.data.sms.SmsPermissionManager
 import app.smsbridge.data.sms.SmsPermissionState
@@ -45,13 +47,15 @@ data class SettingsUiState(
     val syncPaused: Boolean = false,
     val permissions: SmsPermissionState = SmsPermissionState(),
     val device: DeviceEntity? = null,
+    val deliveryReports: Boolean = false,
 )
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val settings: AppSettingsRepository,
     private val scheduler: SyncScheduler,
-    permissions: SmsPermissionManager,
+    val permissions: SmsPermissionManager,
+    private val coordinator: SmsCaptureCoordinator,
     devices: LocalDeviceRepository,
 ) : ViewModel() {
 
@@ -61,9 +65,20 @@ class SettingsViewModel @Inject constructor(
     }
 
     val uiState: StateFlow<SettingsUiState> =
-        combine(settings.syncPaused, permissions.state, devices.localDevice) { paused, perms, device ->
-            SettingsUiState(paused, perms, device)
+        combine(
+            settings.syncPaused,
+            permissions.state,
+            devices.localDevice,
+            settings.deliveryReportsEnabled,
+        ) { paused, perms, device, deliveryReports ->
+            SettingsUiState(paused, perms, device, deliveryReports)
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUiState())
+
+    fun onPermissionsChanged() = coordinator.start()
+
+    fun setDeliveryReports(enabled: Boolean) {
+        viewModelScope.launch { settings.setDeliveryReportsEnabled(enabled) }
+    }
 
     fun setSyncPaused(paused: Boolean) {
         viewModelScope.launch {
@@ -112,17 +127,32 @@ fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
         }
 
         item {
-            SectionCard("Default SMS app") {
-                Text(
-                    if (state.permissions.isDefaultSmsApp) {
-                        "SMS Bridge is your default SMS app."
-                    } else {
-                        "SMS Bridge is not your default SMS app, and does not need to be for backups. " +
-                            "It will never change your default messaging app without asking you first."
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(top = 4.dp),
-                )
+            DefaultSmsAppCard(
+                state = state.permissions,
+                createRequestIntent = viewModel.permissions::createDefaultSmsRequestIntent,
+                openDefaultAppsSettings = { context.startActivity(viewModel.permissions.defaultAppsSettingsIntent()) },
+                onChanged = viewModel::onPermissionsChanged,
+            )
+        }
+
+        if (state.permissions.isDefaultSmsApp) {
+            item {
+                SectionCard("Sending") {
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text("Request delivery reports", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                        Switch(checked = state.deliveryReports, onCheckedChange = viewModel::setDeliveryReports)
+                    }
+                    Text(
+                        "Shows \"Delivered\" when the recipient's phone confirms receipt. Some carriers " +
+                            "charge for or do not support delivery reports. Messages use your default SMS SIM; " +
+                            "replies use the SIM the conversation last arrived on.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
             }
         }
 

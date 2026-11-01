@@ -25,6 +25,14 @@ class AppSettingsRepository @Inject constructor(private val db: SmsBridgeDatabas
 
     suspend fun setSyncPaused(paused: Boolean) = dao.put(AppSettingEntity(KEY_SYNC_PAUSED, paused.toString()))
 
+    /** Off by default: some carriers charge for, or mishandle, status reports. */
+    val deliveryReportsEnabled: Flow<Boolean> = dao.observe(KEY_DELIVERY_REPORTS).map { it == true.toString() }
+
+    suspend fun isDeliveryReportsEnabled(): Boolean = dao.get(KEY_DELIVERY_REPORTS) == true.toString()
+
+    suspend fun setDeliveryReportsEnabled(enabled: Boolean) =
+        dao.put(AppSettingEntity(KEY_DELIVERY_REPORTS, enabled.toString()))
+
     /** True once the first full provider import has finished. */
     suspend fun isInitialImportCompleted(): Boolean = dao.get(KEY_INITIAL_IMPORT_DONE) == true.toString()
 
@@ -41,6 +49,7 @@ class AppSettingsRepository @Inject constructor(private val db: SmsBridgeDatabas
         const val KEY_SYNC_PAUSED = "sync_paused"
         const val KEY_INITIAL_IMPORT_DONE = "initial_import_done"
         const val KEY_DEVICE_SEQUENCE = "device_sequence"
+        const val KEY_DELIVERY_REPORTS = "delivery_reports"
     }
 }
 

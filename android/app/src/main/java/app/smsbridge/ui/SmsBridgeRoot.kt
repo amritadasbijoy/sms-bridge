@@ -11,17 +11,23 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 import app.smsbridge.feature.dashboard.DashboardScreen
+import app.smsbridge.feature.messages.ComposeScreen
 import app.smsbridge.feature.messages.MessagesScreen
+import app.smsbridge.feature.messages.ThreadScreen
 import app.smsbridge.feature.settings.SettingsScreen
 
 /**
@@ -29,41 +35,78 @@ import app.smsbridge.feature.settings.SettingsScreen
  * implement them, so the app never shows a tab that does nothing.
  */
 enum class TopDestination(val route: String, val label: String, val icon: ImageVector) {
-    HOME("home", "Home", Icons.Filled.Home),
-    MESSAGES("messages", "Messages", Icons.Filled.Email),
-    SETTINGS("settings", "Settings", Icons.Filled.Settings),
+    HOME(Routes.HOME, "Home", Icons.Filled.Home),
+    MESSAGES(Routes.MESSAGES, "Messages", Icons.Filled.Email),
+    SETTINGS(Routes.SETTINGS, "Settings", Icons.Filled.Settings),
 }
 
 @Composable
-fun SmsBridgeRoot() {
+fun SmsBridgeRoot(navigationRequests: NavigationRequests) {
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
+    val pending by navigationRequests.pending.collectAsStateWithLifecycle()
+
+    LaunchedEffect(pending) {
+        when (val request = pending) {
+            is NavRequest.OpenThread -> navController.navigate(Routes.thread(request.addressKey)) { launchSingleTop = true }
+            is NavRequest.Compose -> navController.navigate(Routes.compose(request.recipient, request.body))
+            null -> return@LaunchedEffect
+        }
+        navigationRequests.consume()
+    }
 
     Scaffold(
         bottomBar = {
-            NavigationBar {
-                TopDestination.entries.forEach { destination ->
-                    NavigationBarItem(
-                        selected = currentRoute == destination.route,
-                        onClick = { navController.navigateTopLevel(destination.route) },
-                        icon = { Icon(destination.icon, contentDescription = null) },
-                        label = { Text(destination.label) },
-                    )
+            if (TopDestination.entries.any { it.route == currentRoute }) {
+                NavigationBar {
+                    TopDestination.entries.forEach { destination ->
+                        NavigationBarItem(
+                            selected = currentRoute == destination.route,
+                            onClick = { navController.navigateTopLevel(destination.route) },
+                            icon = { Icon(destination.icon, contentDescription = null) },
+                            label = { Text(destination.label) },
+                        )
+                    }
                 }
             }
         },
     ) { padding ->
         NavHost(
             navController = navController,
-            startDestination = TopDestination.HOME.route,
+            startDestination = Routes.HOME,
             modifier = Modifier.padding(padding),
         ) {
-            composable(TopDestination.HOME.route) {
-                DashboardScreen(onOpenMessages = { navController.navigateTopLevel(TopDestination.MESSAGES.route) })
+            composable(Routes.HOME) {
+                DashboardScreen(onOpenMessages = { navController.navigateTopLevel(Routes.MESSAGES) })
             }
-            composable(TopDestination.MESSAGES.route) { MessagesScreen() }
-            composable(TopDestination.SETTINGS.route) { SettingsScreen() }
+            composable(Routes.MESSAGES) {
+                MessagesScreen(
+                    onOpenThread = { navController.navigate(Routes.thread(it)) },
+                    onCompose = { navController.navigate(Routes.compose()) },
+                )
+            }
+            composable(Routes.SETTINGS) { SettingsScreen() }
+            composable(
+                Routes.THREAD,
+                arguments = listOf(navArgument("key") { type = NavType.StringType; defaultValue = "" }),
+            ) {
+                ThreadScreen(onBack = { navController.popBackStack() })
+            }
+            composable(
+                Routes.COMPOSE,
+                arguments = listOf(
+                    navArgument("to") { type = NavType.StringType; defaultValue = "" },
+                    navArgument("body") { type = NavType.StringType; defaultValue = "" },
+                ),
+            ) {
+                ComposeScreen(
+                    onBack = { navController.popBackStack() },
+                    onSent = { key ->
+                        navController.navigate(Routes.thread(key)) { popUpTo(Routes.COMPOSE) { inclusive = true } }
+                    },
+                )
+            }
         }
     }
 }

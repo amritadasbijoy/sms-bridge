@@ -64,4 +64,24 @@ data class SmsPage(
 /** Abstraction over the Telephony provider so scanning logic is testable off-device. */
 interface SmsSource {
     suspend fun readPage(query: SmsScanQuery, afterProviderId: Long, limit: Int): SmsPage
+
+    suspend fun readById(providerId: Long): ProviderSms?
+}
+
+/**
+ * Writes to the Telephony provider. Android only allows this for the default SMS app; every
+ * method returns null/false/0 (never throws) when the write is refused.
+ */
+interface SmsProviderWriter {
+    /** Stores a delivered incoming message in the inbox. Returns the new provider `_id`. */
+    suspend fun insertInbox(sms: IncomingSms): Long?
+
+    /** Stores a message about to be sent in the outbox. Returns the new provider `_id`. */
+    suspend fun insertOutbox(address: String, body: String, date: Long, subscriptionId: Int?): Long?
+
+    suspend fun updateType(providerId: Long, type: SmsType, errorCode: Int?): Boolean
+
+    suspend fun updateDeliveryStatus(providerId: Long, status: Int): Boolean
+
+    suspend fun markRead(providerIds: List<Long>): Int
 }

@@ -51,6 +51,16 @@ class SmsContentProvider @Inject constructor(
                 SmsPage(items, lastId, rows, exhausted = rows < limit)
             }
         }
+
+    override suspend fun readById(providerId: Long): ProviderSms? = withContext(ioDispatcher) {
+        context.contentResolver.query(
+            Telephony.Sms.CONTENT_URI,
+            null,
+            "${Telephony.Sms._ID} = ?",
+            arrayOf(providerId.toString()),
+            null,
+        )?.use { c -> if (c.moveToFirst()) SmsCursorMapper(c).map(c) else null }
+    }
 }
 
 /** Maps Telephony provider cursor rows to [ProviderSms], tolerating missing columns and nulls. */

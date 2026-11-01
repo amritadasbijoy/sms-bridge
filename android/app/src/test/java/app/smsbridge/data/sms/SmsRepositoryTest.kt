@@ -10,6 +10,7 @@ import app.smsbridge.core.model.SyncEventType
 import app.smsbridge.data.settings.AppSettingsRepository
 import app.smsbridge.data.settings.LocalDeviceRepository
 import app.smsbridge.data.sync.PendingSyncRepository
+import app.smsbridge.testing.FakeSmsProviderWriter
 import app.smsbridge.testing.FakeSmsSource
 import app.smsbridge.testing.Synthetic
 import kotlinx.coroutines.flow.first
@@ -40,8 +41,11 @@ class SmsRepositoryTest {
         source = FakeSmsSource()
         settings = AppSettingsRepository(db)
         pendingSync = PendingSyncRepository(db, settings, time)
-        repository = SmsRepository(db, SmsReader(source), pendingSync, LocalDeviceRepository(db, time), time)
+        writer = FakeSmsProviderWriter(source)
+        repository = SmsRepository(db, SmsReader(source), pendingSync, LocalDeviceRepository(db, time), time, writer)
     }
+
+    private lateinit var writer: FakeSmsProviderWriter
 
     @After
     fun tearDown() = db.close()

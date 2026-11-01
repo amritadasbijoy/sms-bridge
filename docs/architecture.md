@@ -91,7 +91,44 @@ Pages are keyset-paginated on `_id`, and each cursor is closed after 500 rows.
 The first run imports everything without emitting sync events. The initial cloud snapshot is
 a separate Phase 6 operation, not 50,000 queued events.
 
-## Local database (Room, schema v1)
+## Default SMS app mode (Phase 2)
+
+Holding the SMS role changes who is responsible for what. The default app must store every
+message it receives and sends in the Telephony provider (the system no longer does it for that
+app) and is the only app that notifies the user.
+
+| Component | Role requirement | What it does |
+|---|---|---|
+| `SmsDeliverReceiver` | `SMS_DELIVER` (`BROADCAST_SMS`) | provider inbox insert → archive link → notification → sync event |
+| `MmsWapPushReceiver` | `WAP_PUSH_DELIVER` (`BROADCAST_WAP_PUSH`) | MMS not supported: alerts the user |
+| `HeadlessSmsSendService` | `RESPOND_VIA_MESSAGE` | Quick replies to incoming calls |
+| `MainActivity` `SENDTO` filter | compose from `sms:` links | Opens the composer prefilled |
+| `SmsStatusReceiver` | (own PendingIntents) | Per-part sent results and delivery reports |
+
+`SmsReceiver` (`SMS_RECEIVED`) returns early while SMS Bridge is the default, so each message is
+handled exactly once. Fingerprint dedup still covers any overlap.
+
+### Send pipeline
+
+```
+compose → SmsSender.send
+  → provider outbox insert (type OUTBOX)   → archive row + SMS_SENT event
+  → SmsManager.sendMultipartTextMessage(parts, sentIntents[part], deliveryIntent[last])
+SmsStatusReceiver (per part)
+  failure on any part → FAILED (+ error_code), never flipped back
+  success on final part → SENT (+ date_sent)          → SMS_STATUS_CHANGED
+  delivery report (TP-Status / 3GPP2 error class) → STATUS_COMPLETE/PENDING/FAILED → SMS_STATUS_CHANGED
+```
+
+Each part's PendingIntent is unique by data URI (`smsbridge://status/<providerId>/<part>`). The
+delivery intent is mutable (telephony attaches the report PDU) and explicit.
+
+### Conversations
+
+Threads are grouped by `address_key` (schema v2), not by provider `thread_id`. The key is
+device-independent and also covers archived rows that are no longer in the provider.
+
+## Local database (Room, schema v2)
 
 | Table | Purpose |
 |---|---|

@@ -21,6 +21,7 @@ import app.smsbridge.core.model.SmsType
         Index("type"),
         Index("source_device_id"),
         Index("provider_id"),
+        Index(value = ["address_key", "date"]),
     ],
 )
 data class SmsMessageEntity(
@@ -47,6 +48,12 @@ data class SmsMessageEntity(
     val origin: CaptureOrigin,
     @ColumnInfo(name = "created_at") val createdAt: Long,
     @ColumnInfo(name = "updated_at") val updatedAt: Long,
+    /**
+     * Normalized address (see SmsFingerprint.normalizeAddress) used to group conversations, so
+     * "+880 1711-000000" and "01711000000" are one thread. Device-independent, unlike thread_id.
+     * Added in schema v2.
+     */
+    @ColumnInfo(name = "address_key", defaultValue = "''") val addressKey: String,
 ) {
     override fun toString(): String = "SmsMessageEntity(id=$id, type=$type, providerId=$providerId)"
 }

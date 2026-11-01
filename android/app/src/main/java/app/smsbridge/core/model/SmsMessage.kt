@@ -20,6 +20,11 @@ data class SmsMessage(
     val subscriptionId: Int?,
     val sourceDeviceId: String?,
     val fingerprint: String?,
+    /** Conversation key, see [AddressKey]. */
+    val addressKey: String = AddressKey.of(address),
+    /** `Telephony.Sms.STATUS_*` delivery status for outgoing messages, when known. */
+    val deliveryStatus: Int? = null,
+    val errorCode: Int? = null,
 ) {
     override fun toString(): String =
         "SmsMessage(id=$id, type=$type, date=$date, bodyLength=${body.length}, hasAddress=${address != null})"

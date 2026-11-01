@@ -1,8 +1,10 @@
 package app.smsbridge.testing
 
 import app.smsbridge.core.model.SmsType
+import app.smsbridge.data.sms.IncomingSms
 import app.smsbridge.data.sms.ProviderSms
 import app.smsbridge.data.sms.SmsPage
+import app.smsbridge.data.sms.SmsProviderWriter
 import app.smsbridge.data.sms.SmsScanQuery
 import app.smsbridge.data.sms.SmsSource
 import java.util.TreeMap
@@ -53,5 +55,52 @@ class FakeSmsSource : SmsSource {
             .filter { query.matches(it.providerId, it.date) }
             .take(limit)
         return SmsPage(page, page.lastOrNull()?.providerId ?: afterProviderId, page.size, page.size < limit)
+    }
+
+    override suspend fun readById(providerId: Long): ProviderSms? = rows[providerId]
+}
+
+/**
+ * Behaves like the Telephony provider for the default SMS app: writes land in [source].
+ * Set [isDefaultApp] = false to simulate Android refusing writes.
+ */
+class FakeSmsProviderWriter(private val source: FakeSmsSource) : SmsProviderWriter {
+    var isDefaultApp = true
+
+    private fun nextId() = (source.rows.keys.maxOrNull() ?: 0L) + 1
+
+    override suspend fun insertInbox(sms: IncomingSms): Long? {
+        if (!isDefaultApp) return null
+        val id = nextId()
+        source.put(
+            ProviderSms(id, 1, sms.address, sms.body, sms.receivedAt, sms.dateSent, SmsType.INBOX, false, false, sms.subscriptionId, null, null),
+        )
+        return id
+    }
+
+    override suspend fun insertOutbox(address: String, body: String, date: Long, subscriptionId: Int?): Long? {
+        if (!isDefaultApp) return null
+        val id = nextId()
+        source.put(ProviderSms(id, 1, address, body, date, 0, SmsType.OUTBOX, true, true, subscriptionId, null, null))
+        return id
+    }
+
+    override suspend fun updateType(providerId: Long, type: SmsType, errorCode: Int?): Boolean {
+        val row = source.rows[providerId]
+        if (!isDefaultApp || row == null) return false
+        source.put(row.copy(type = type, errorCode = errorCode ?: row.errorCode, dateSent = if (type == SmsType.SENT) row.date + 1_000 else row.dateSent))
+        return true
+    }
+
+    override suspend fun updateDeliveryStatus(providerId: Long, status: Int): Boolean {
+        val row = source.rows[providerId]
+        if (!isDefaultApp || row == null) return false
+        source.put(row.copy(status = status))
+        return true
+    }
+
+    override suspend fun markRead(providerIds: List<Long>): Int {
+        if (!isDefaultApp) return 0
+        return providerIds.count { id -> source.rows[id]?.let { source.put(it.copy(read = true, seen = true)); true } ?: false }
     }
 }
