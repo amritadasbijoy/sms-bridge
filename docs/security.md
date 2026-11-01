@@ -91,6 +91,28 @@ Known limitations:
 - The receiver listens on all interfaces of the current network while the screen is open.
 - No discovery yet (mDNS/NSD): the QR carries the IP address. Wi-Fi Direct is deferred.
 
+## Phase 5: server (accounts and devices)
+
+| Control | Design |
+|---|---|
+| Passwords | Argon2id (BouncyCastle), m=19 MiB, t=2, p=1, 16-byte salt, PHC format; min 12 chars; constant-time verify; a dummy hash is verified for unknown users (no timing enumeration); identical error for wrong user or password |
+| Account creation | The first account only; more only if `SMSBRIDGE_ALLOW_REGISTRATION=true`. Creation is serialised with a table lock (no race for "first") |
+| Sessions | 256-bit random token in an `HttpOnly; SameSite=Strict; Path=/api` cookie (`Secure` unless disabled for local HTTP); stored as SHA-256 only; 7-day absolute and 24 h idle expiry; logout deletes it |
+| CSRF | SameSite=Strict, plus a required `X-Requested-With: SmsBridge` header on every cookie-authenticated non-GET request (forces a CORS preflight the server never approves) |
+| Device registration | A logged-in user creates a one-time pairing code (50 bits, 10 minutes, single use, consumed atomically, stored hashed). The phone exchanges it for a 256-bit bearer token (stored hashed). No password is ever typed on the phone. |
+| Revocation | Revoking a device revokes all its tokens at once and records it in `revoked_devices`; a revoked device id cannot re-register |
+| Rate limiting | 10 requests per minute per client address on register/login/device registration |
+| Input limits | JSON bodies up to 64 KiB; usernames `[A-Za-z0-9._-]{3,64}`; device names ≤ 64; keys ≤ 512 |
+| SQL | Parameterised JDBC only; Flyway migrations |
+| Headers | `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store`; HSTS at the proxy |
+| Logging | Method, path, status only. Verified: 0 occurrences of tokens, passwords or pairing codes in container logs |
+| Audit | `audit_events`: action, outcome, user/device id, client IP (for the owner's own security review) |
+| Network | PostgreSQL on an internal-only Docker network; API bound to 127.0.0.1; only Caddy is public |
+| Data at rest | `sync_events` stores ciphertext only (Phase 6); DB backups encrypted (AES-256, PBKDF2 600k) |
+
+Known limitations: no 2FA yet (Phase 7, for new browsers); passwords pass through an immutable JVM
+`String` during hashing; the rate limiter is in-memory, per instance.
+
 ### Known Phase 1 gaps
 
 - The local database is not encrypted at rest beyond Android's file-based encryption and app

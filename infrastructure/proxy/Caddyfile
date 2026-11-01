@@ -1,0 +1,21 @@
+# HTTPS reverse proxy. Caddy obtains and renews certificates automatically (Let's Encrypt).
+# Requires SMSBRIDGE_DOMAIN to resolve to the server and ports 80/443 to be open.
+{$SMSBRIDGE_DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		-Server
+	}
+
+	# Only the API and health check are exposed; everything else is 404.
+	@api path /api/* /health
+	handle @api {
+		reverse_proxy api:8080
+	}
+	handle {
+		respond 404
+	}
+}
