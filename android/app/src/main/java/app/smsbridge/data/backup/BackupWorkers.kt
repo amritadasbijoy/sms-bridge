@@ -69,6 +69,7 @@ class BackupScheduler @Inject constructor(@ApplicationContext private val contex
         const val KEY_TOTAL = "total"
         const val KEY_RESTORED = "restored"
         const val KEY_DUPLICATES = "duplicates"
+        const val KEY_DRAFTS_SKIPPED = "drafts_skipped"
         const val KEY_SELECTED = "selected"
         const val KEY_OPERATION = "operation"
         const val KEY_ERROR = "error"
@@ -146,7 +147,11 @@ class BackupRestoreWorker @AssistedInject constructor(
                 )
             }
             backups.finishHistory(historyId, HistoryKind.COMPLETED, result.restored)
-            AppLog.i(TAG, "restore target=${options.target} read=${result.read} restored=${result.restored} duplicates=${result.duplicates}")
+            AppLog.i(
+                TAG,
+                "restore target=${options.target} read=${result.read} restored=${result.restored} " +
+                    "duplicates=${result.duplicates} draftsSkipped=${result.draftsSkipped}",
+            )
             Result.success(
                 workDataOf(
                     BackupScheduler.KEY_OPERATION to BackupScheduler.OP_RESTORE,
@@ -154,6 +159,7 @@ class BackupRestoreWorker @AssistedInject constructor(
                     BackupScheduler.KEY_SELECTED to result.selected,
                     BackupScheduler.KEY_RESTORED to result.restored,
                     BackupScheduler.KEY_DUPLICATES to result.duplicates,
+                    BackupScheduler.KEY_DRAFTS_SKIPPED to result.draftsSkipped,
                     BackupScheduler.KEY_TARGET to options.target.name,
                 ),
             )

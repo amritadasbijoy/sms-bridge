@@ -272,6 +272,15 @@ private fun WorkStatusCard(info: WorkInfo, permissions: SmsPermissionState, onSw
                     "$restored restored, $duplicates already present, ${done - selected} not selected ($done in file).",
                     modifier = Modifier.padding(top = 4.dp),
                 )
+                val drafts = data.getInt(BackupScheduler.KEY_DRAFTS_SKIPPED, 0)
+                if (drafts > 0) {
+                    Text(
+                        "$drafts drafts were not restored into the phone: Android keeps only one draft per " +
+                            "conversation. Restore into the SMS Bridge archive to keep them.",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
                 if (data.getString(BackupScheduler.KEY_TARGET) == RestoreTarget.PHONE.name && permissions.isDefaultSmsApp) {
                     Text(
                         "If you made SMS Bridge the default SMS app only for this restore, you can switch back now.",
@@ -350,7 +359,7 @@ private fun RestorePlanner(
                 title = "This phone's messages",
                 detail = "Writes them into Android's SMS database so every messaging app shows them. " +
                     "Android only allows this for the default SMS app. Android assigns new internal and " +
-                    "conversation ids, and SIM assignment is not restored.",
+                    "conversation ids; SIM assignment and drafts are not restored.",
                 onSelect = { target = RestoreTarget.PHONE },
             )
 

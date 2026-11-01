@@ -124,6 +124,24 @@ class RestoreEngineTest {
     }
 
     @Test
+    fun draftsGoToArchiveButNeverIntoThePhone() = runBlocking {
+        // Found on the emulator: Android keeps one draft per conversation and deletes older ones.
+        val records = listOf(
+            BackupSamples.record(1),
+            BackupSamples.record(2, type = SmsType.DRAFT),
+            BackupSamples.record(3, type = SmsType.DRAFT),
+        )
+        val phone = restore(xml(records), RestoreOptions(RestoreTarget.PHONE))
+        assertEquals(1, phone.restored)
+        assertEquals(2, phone.draftsSkipped)
+        assertTrue(source.rows.values.none { it.type == SmsType.DRAFT })
+
+        val archive = restore(xml(records), RestoreOptions(RestoreTarget.ARCHIVE))
+        assertEquals(3, archive.restored)
+        assertEquals(0, archive.draftsSkipped)
+    }
+
+    @Test
     fun phoneRestoreFailsLoudlyIfAndroidRefusesWrites() = runBlocking {
         writer.isDefaultApp = false
         val outcome = runCatching { restore(xml(listOf(BackupSamples.record(1))), RestoreOptions(RestoreTarget.PHONE)) }

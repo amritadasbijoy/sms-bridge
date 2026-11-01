@@ -43,6 +43,8 @@ data class RestoreResult(
     val selected: Int,
     val restored: Int,
     val duplicates: Int,
+    /** Drafts are never written into the phone's SMS database (see [RestoreEngine]). */
+    val draftsSkipped: Int = 0,
 ) {
     val notSelected: Int get() = read - selected
 }
@@ -70,6 +72,7 @@ class RestoreEngine @Inject constructor(
         var selected = 0
         var restored = 0
         var duplicates = 0
+        var draftsSkipped = 0
         val xml = SmsXmlReader(messages)
         xml.asSequence().chunked(BATCH).forEach { batch ->
             read += batch.size
@@ -82,8 +85,13 @@ class RestoreEngine @Inject constructor(
                     duplicates += chosen.size - inserted
                 }
                 RestoreTarget.PHONE -> {
-                    val fresh = chosen.filter { seen!!.add(it.fingerprint()) }
-                    duplicates += chosen.size - fresh.size
+                    // Android's Telephony provider keeps at most one draft per conversation and
+                    // silently deletes the older ones, so restoring drafts there would lose
+                    // data while reporting success. Drafts stay restorable into the archive.
+                    val (drafts, messagesOnly) = chosen.partition { it.type == SmsType.DRAFT }
+                    draftsSkipped += drafts.size
+                    val fresh = messagesOnly.filter { seen!!.add(it.fingerprint()) }
+                    duplicates += messagesOnly.size - fresh.size
                     val inserted = providerWriter.insertRestored(fresh.map { it.toRestored() })
                     check(inserted == fresh.size) {
                         "the phone accepted $inserted of ${fresh.size} messages (is SMS Bridge still the default SMS app?)"
@@ -93,7 +101,7 @@ class RestoreEngine @Inject constructor(
             }
             onProgress(read, restored)
         }
-        return RestoreResult(read, selected, restored, duplicates)
+        return RestoreResult(read, selected, restored, duplicates, draftsSkipped)
     }
 
     private suspend fun phoneFingerprints(): MutableSet<String> {

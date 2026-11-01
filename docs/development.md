@@ -7,6 +7,9 @@
 | macOS | 27.2, arm64 | |
 | JDK | Amazon Corretto 17.0.14 | Required by AGP 8.3 |
 | Android SDK | platform 34, build-tools 34.0.0, platform-tools | `~/Library/Android/sdk` |
+| SDK command-line tools | 23.0 (`cmdline-tools/latest`) | Installed 2026-11-01; `sdkmanager` now wraps the "Android CLI" |
+| Emulator | 37.2.13 | Updated 2026-11-01 as a dependency of the system image |
+| System image | `system-images;android-34;google_apis;arm64-v8a` r14 | Earlier images in this SDK were empty stubs (no `.img`) |
 | Android Studio | not installed | Optional; the CLI build works without it |
 | Gradle | 8.4 via wrapper | `android/gradlew` |
 | Git | 2.54 | |
@@ -29,6 +32,45 @@ cd android
 ```
 
 `local.properties` (git-ignored) must contain `sdk.dir=/path/to/Android/sdk`.
+
+## Emulator workflow (preferred for testing)
+
+Test on emulators with synthetic messages. Real phones in this household carry real messages;
+use them only for read-only checks, with the owner's consent each time.
+
+Two dedicated AVDs exist: `SmsBridge_A` and `SmsBridge_B` (Android 14 Google APIs arm64, no Play
+Store, 2 GB RAM, 4 GB data). `SmsBridge_B` is for Phase 4 device-to-device transfer.
+
+```bash
+EMU=~/Library/Android/sdk/emulator/emulator
+ADB=~/Library/Android/sdk/platform-tools/adb
+$EMU -avd SmsBridge_A -port 5554 -no-boot-anim -no-audio &      # add -wipe-data for a clean device
+$ADB -s emulator-5554 install -r android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+Seed synthetic data (deterministic; 5,000 messages with Bangla, emoji, multipart, both SIMs,
+drafts/failed, number-format variants, one duplicate, one MMS and one invalid row):
+
+```bash
+python3 tools/synthetic_sms.py 5000 /tmp/synthetic-sms-5000.xml
+$ADB -s emulator-5554 push /tmp/synthetic-sms-5000.xml /sdcard/Download/
+$ADB -s emulator-5554 shell content call --uri content://media --method scan_volume --arg external_primary
+```
+
+Then in SMS Bridge, go to Backup → Choose backup file → restore into "This phone's messages" (needs the SMS role).
+On the emulator, shortcuts are fine (never do these on a real phone):
+
+```bash
+$ADB -s emulator-5554 shell pm grant app.smsbridge.debug android.permission.READ_SMS
+$ADB -s emulator-5554 shell pm grant app.smsbridge.debug android.permission.RECEIVE_SMS
+$ADB -s emulator-5554 shell pm grant app.smsbridge.debug android.permission.POST_NOTIFICATIONS
+$ADB -s emulator-5554 shell cmd role add-role-holder android.app.role.SMS app.smsbridge.debug
+$ADB -s emulator-5554 emu sms send 15550104242 "Synthetic incoming"    # simulated incoming SMS
+$ADB -s emulator-5554 shell run-as app.smsbridge.debug sqlite3 databases/sms_bridge.db "select type,count(*) from sms_messages group by 1;"
+```
+
+Note: `content query --uri content://sms` from the adb shell does not show draft and failed rows
+to a caller that is not the default SMS app. Count those through the app's archive instead.
 
 ## Installing on a phone
 

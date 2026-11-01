@@ -157,7 +157,7 @@ class BackupFormatTest {
         assertEquals(1, info.incoming)
         assertEquals(1, info.outgoing)
         assertEquals(1, info.skippedInvalid)
-        assertTrue(info.skippedUnsupported >= 1)
+        assertEquals(1, info.skippedUnsupported) // one <mms>, not its nested <parts>/<part>
         assertTrue(info.isUsable)
 
         val records = SmsXmlReader(ByteArrayInputStream(xml.toByteArray())).asSequence().toList()

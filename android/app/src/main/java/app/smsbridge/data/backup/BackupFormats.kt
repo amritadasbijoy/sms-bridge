@@ -176,7 +176,8 @@ class SmsXmlReader(input: InputStream) : Iterator<BackupRecord> {
                             return
                         }
                     }
-                    else -> if (parser.depth > 1) skippedUnsupported++
+                    // Only direct children of <smses> count (an <mms> has nested <parts>/<part>).
+                    else -> if (parser.depth == 2) skippedUnsupported++
                 }
             }
         }
