@@ -27,6 +27,7 @@ dependencies {
     implementation("io.ktor:ktor-server-rate-limit-jvm:$ktor")
     implementation("io.ktor:ktor-server-default-headers-jvm:$ktor")
     implementation("io.ktor:ktor-server-forwarded-header-jvm:$ktor")
+    implementation("io.ktor:ktor-server-websockets-jvm:$ktor")
 
     implementation("org.postgresql:postgresql:42.7.4")
     implementation("com.zaxxer:HikariCP:5.1.0")
@@ -39,6 +40,7 @@ dependencies {
     implementation("ch.qos.logback:logback-classic:1.5.6")
 
     testImplementation("io.ktor:ktor-server-test-host-jvm:$ktor")
+    testImplementation("io.ktor:ktor-client-websockets-jvm:$ktor")
     testImplementation(kotlin("test-junit5"))
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.3")
     testImplementation("org.testcontainers:postgresql:1.20.1")

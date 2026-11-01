@@ -120,6 +120,12 @@ interface SmsMessageDao {
     @Query("SELECT MAX(rowid) FROM sms_messages")
     suspend fun maxRowId(): Long?
 
+    @Query("SELECT id FROM sms_messages WHERE rowid > :afterRowId AND rowid <= :maxRowId ORDER BY rowid LIMIT :limit")
+    suspend fun idPage(afterRowId: Long, maxRowId: Long, limit: Int): List<String>
+
+    @Query("SELECT rowid FROM sms_messages WHERE id = :id")
+    suspend fun rowIdOf(id: String): Long?
+
     @Query("SELECT COUNT(*) FROM sms_messages WHERE rowid <= :maxRowId")
     suspend fun countUpTo(maxRowId: Long): Int
 

@@ -45,6 +45,14 @@ class AppSettingsRepository @Inject constructor(private val db: SmsBridgeDatabas
         next
     }
 
+    suspend fun getString(key: String): String? = dao.get(key)
+
+    suspend fun putString(key: String, value: String) = dao.put(AppSettingEntity(key, value))
+
+    fun observeString(key: String): Flow<String?> = dao.observe(key)
+
+    suspend fun deletePrefix(prefix: String) = dao.deletePrefix(prefix)
+
     private companion object {
         const val KEY_SYNC_PAUSED = "sync_paused"
         const val KEY_INITIAL_IMPORT_DONE = "initial_import_done"

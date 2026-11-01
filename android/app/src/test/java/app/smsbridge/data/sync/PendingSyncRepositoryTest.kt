@@ -79,7 +79,7 @@ class PendingSyncRepositoryTest {
     @Test
     fun unconfiguredTransportNeverReportsSuccess() = runBlocking {
         val transport = UnconfiguredSyncTransport()
-        assertFalse(transport.isConfigured)
+        assertFalse(transport.isConfigured())
         assertTrue(transport.upload(emptyList()) is SyncUploadResult.RetryableFailure)
     }
 }

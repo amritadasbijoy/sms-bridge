@@ -25,6 +25,7 @@ class SmsSyncWorker @AssistedInject constructor(
     private val pendingSync: PendingSyncRepository,
     private val settings: AppSettingsRepository,
     private val transport: SyncTransport,
+    private val scheduler: SyncScheduler,
 ) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
@@ -32,7 +33,7 @@ class SmsSyncWorker @AssistedInject constructor(
             AppLog.i(TAG, "sync paused by user; ${pendingSync.pendingCountNow()} event(s) kept")
             return Result.success()
         }
-        if (!transport.isConfigured) {
+        if (!transport.isConfigured()) {
             AppLog.i(TAG, "no server configured; ${pendingSync.pendingCountNow()} event(s) queued locally")
             return Result.success()
         }
@@ -60,14 +61,17 @@ class SmsSyncWorker @AssistedInject constructor(
                 }
             }
         }
-        // More remains; run again rather than holding the worker for too long.
-        return Result.retry()
+        // More remains (e.g. the initial upload): chain another run instead of holding this one,
+        // without backoff since nothing failed.
+        AppLog.i(TAG, "uploaded ${MAX_BATCHES_PER_RUN * BATCH_SIZE} events; continuing")
+        scheduler.scheduleSync()
+        return Result.success()
     }
 
     private companion object {
         const val TAG = "SyncWorker"
-        const val BATCH_SIZE = 100
-        const val MAX_BATCHES_PER_RUN = 20
+        const val BATCH_SIZE = 200
+        const val MAX_BATCHES_PER_RUN = 25
     }
 }
 

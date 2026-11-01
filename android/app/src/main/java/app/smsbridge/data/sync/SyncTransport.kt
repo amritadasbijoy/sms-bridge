@@ -1,10 +1,6 @@
 package app.smsbridge.data.sync
 
 import app.smsbridge.core.model.PendingSyncEvent
-import dagger.Binds
-import dagger.Module
-import dagger.hilt.InstallIn
-import dagger.hilt.components.SingletonComponent
 import javax.inject.Inject
 
 /**
@@ -15,8 +11,8 @@ import javax.inject.Inject
  * over HTTPS with the event id as idempotency key, and report which ids the server acknowledged.
  */
 interface SyncTransport {
-    /** False until the user has paired this device with a server. */
-    val isConfigured: Boolean
+    /** False until the user has paired this device with a server and it holds the vault key. */
+    suspend fun isConfigured(): Boolean
 
     suspend fun upload(events: List<PendingSyncEvent>): SyncUploadResult
 }
@@ -27,12 +23,9 @@ sealed interface SyncUploadResult {
     data class PermanentFailure(val code: String) : SyncUploadResult
 }
 
-/**
- * Phase 1 binding: no server exists yet, so nothing is uploaded and events stay queued locally.
- * This is the real behaviour of an unpaired device, not a stand-in for one.
- */
+/** A transport for a phone that is not connected to any server. Used in tests. */
 class UnconfiguredSyncTransport @Inject constructor() : SyncTransport {
-    override val isConfigured: Boolean = false
+    override suspend fun isConfigured(): Boolean = false
 
     override suspend fun upload(events: List<PendingSyncEvent>): SyncUploadResult =
         SyncUploadResult.RetryableFailure(CODE_NOT_CONFIGURED)
@@ -40,11 +33,4 @@ class UnconfiguredSyncTransport @Inject constructor() : SyncTransport {
     companion object {
         const val CODE_NOT_CONFIGURED = "not_configured"
     }
-}
-
-@Module
-@InstallIn(SingletonComponent::class)
-abstract class SyncModule {
-    @Binds
-    abstract fun bindSyncTransport(impl: UnconfiguredSyncTransport): SyncTransport
 }

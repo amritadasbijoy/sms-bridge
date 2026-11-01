@@ -61,16 +61,17 @@ class DashboardViewModel @Inject constructor(
         settings.syncPaused,
         scheduler.observeSyncRunning(),
     ) { pending, lastSynced, paused, running ->
+        val configured = transport.isConfigured()
         SyncSummary(
             state = when {
                 paused -> SyncDisplayState.PAUSED
-                running && transport.isConfigured -> SyncDisplayState.SYNCHRONIZING
+                running && configured -> SyncDisplayState.SYNCHRONIZING
                 pending > 0 -> SyncDisplayState.PENDING
                 else -> SyncDisplayState.UP_TO_DATE
             },
             pendingEvents = pending,
             lastSyncedAt = lastSynced,
-            cloudConfigured = transport.isConfigured,
+            cloudConfigured = configured,
         )
     }
 
