@@ -69,6 +69,47 @@ class PendingSyncRepositoryTest {
     }
 
     @Test
+    fun liveEventsGoBeforeTheHistoryBacklog() = runBlocking {
+        repeat(3) { repo.enqueue("old$it", SyncEventType.SMS_IMPORTED) }
+        val live = repo.enqueue("new", SyncEventType.SMS_RECEIVED)
+        val batch = repo.nextBatch(2)
+        assertEquals(live, batch.first().eventId)
+        assertEquals(listOf(SyncEventType.SMS_RECEIVED, SyncEventType.SMS_IMPORTED), batch.map { it.eventType })
+    }
+
+    /** Records what it was asked to upload; acknowledges everything or fails. */
+    private class FakeTransport(var fail: Boolean = false) : SyncTransport {
+        val uploaded = mutableListOf<List<String>>()
+        override suspend fun isConfigured() = true
+        override suspend fun upload(events: List<app.smsbridge.core.model.PendingSyncEvent>): SyncUploadResult {
+            uploaded += events.map { it.messageId!! }
+            return if (fail) SyncUploadResult.RetryableFailure("network") else SyncUploadResult.Acknowledged(events.map { it.eventId }.toSet())
+        }
+    }
+
+    @Test
+    fun instantUploadSendsOnlyTheNewMessageAheadOfTheBacklog() = runBlocking {
+        repeat(3) { repo.enqueue("old$it", SyncEventType.SMS_IMPORTED) }
+        repo.enqueue("new", SyncEventType.SMS_RECEIVED)
+        val transport = FakeTransport()
+        assertTrue(InstantUploader(repo, settings, transport).uploadNow(listOf("new")))
+        assertEquals(listOf(listOf("new")), transport.uploaded)
+        assertEquals(3, repo.pendingCount.first()) // the backlog is left for the worker
+    }
+
+    @Test
+    fun instantUploadFailureLeavesTheEventForTheWorker() = runBlocking {
+        val id = repo.enqueue("new", SyncEventType.SMS_RECEIVED)
+        assertFalse(InstantUploader(repo, settings, FakeTransport(fail = true)).uploadNow(listOf("new")))
+        assertEquals(listOf(id), repo.nextBatch(10).map { it.eventId })
+
+        settings.setSyncPaused(true)
+        val transport = FakeTransport()
+        assertFalse(InstantUploader(repo, settings, transport).uploadNow(listOf("new")))
+        assertTrue(transport.uploaded.isEmpty())
+    }
+
+    @Test
     fun pauseSettingPersists() = runBlocking {
         assertFalse(settings.isSyncPaused())
         settings.setSyncPaused(true)

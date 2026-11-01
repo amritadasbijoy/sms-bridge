@@ -49,6 +49,11 @@ class PendingSyncRepository @Inject constructor(
         PendingSyncEvent(it.id, it.messageId, it.eventType, it.deviceSequence, it.createdAt, it.attempts)
     }
 
+    suspend fun pendingForMessages(messageIds: Collection<String>): List<PendingSyncEvent> =
+        messageIds.chunked(500).flatMap { chunk ->
+            dao.pendingForMessages(chunk).map { PendingSyncEvent(it.id, it.messageId, it.eventType, it.deviceSequence, it.createdAt, it.attempts) }
+        }
+
     suspend fun pendingCountNow(): Int = dao.pendingCount()
 
     suspend fun markInProgress(ids: Collection<String>) = update(ids, SyncState.IN_PROGRESS, 0, null)
