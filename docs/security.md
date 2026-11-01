@@ -12,7 +12,7 @@
 | Control | Where |
 |---|---|
 | `READ_SMS` / `RECEIVE_SMS` requested separately with plain-language explanations | `feature/permissions/SmsPermissionCard.kt` |
-| Default SMS role is never requested (handler not implemented yet) | `SmsPermissionManager` |
+| Default SMS role never requested automatically (Phase 2 adds an explicit, explained opt-in) | `SmsPermissionManager` |
 | SMS broadcast receiver protected by `android.permission.BROADCAST_SMS` | `AndroidManifest.xml` |
 | `allowBackup=false`: archive is excluded from Google/device backup | `AndroidManifest.xml` |
 | Single logging facade; exceptions reduced to class name; `toString()` of every SMS type redacted (tested) | `AppLog`, `RedactionTest` |
@@ -24,6 +24,18 @@
 
 Fingerprints are SHA-256 of content and stay on the device. Short messages could be
 brute-forced from a bare hash, so they must never be sent to the server unencrypted.
+
+## Phase 2 controls (default SMS app)
+
+| Control | Where |
+|---|---|
+| Role is requested only from an explicit button, after an explanation dialog with an MMS warning, then the system dialog | `DefaultSmsAppCard` |
+| SMS_DELIVER / WAP push receivers protected by `BROADCAST_SMS` / `BROADCAST_WAP_PUSH`; respond-via service by `SEND_RESPOND_VIA_MESSAGE` | `AndroidManifest.xml` |
+| Status receiver not exported; PendingIntents explicit; only the delivery intent is mutable (required for the report PDU) | `SmsSender` |
+| Notifications are `VISIBILITY_PRIVATE` with a public "New message" version: no sender or text on a secure lock screen | `MessageNotifier` |
+| Provider writes refused when not default are caught and logged by exception class only | `AndroidSmsProviderWriter` |
+| Sending is unavailable unless SMS Bridge is the default app | `SmsSender`, UI |
+| `ComposeRequest.toString()` redacted (tested) | `ComposeRequest` |
 
 ### Known Phase 1 gaps
 

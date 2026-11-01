@@ -12,8 +12,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 
 /**
- * Receives `SMS_RECEIVED` (delivered to any app holding RECEIVE_SMS; the default SMS app gets
- * `SMS_DELIVER` instead, which arrives in Phase 2).
+ * Backup-only mode: receives `SMS_RECEIVED`, which goes to every app holding RECEIVE_SMS.
+ * When SMS Bridge is the default SMS app the same message also arrives as `SMS_DELIVER` at
+ * [SmsDeliverReceiver], which owns it (provider write + notification), so this receiver steps aside.
  *
  * onReceive only parses the PDUs, then uses goAsync() for a short, bounded database write and
  * schedules WorkManager jobs. No network access happens here.
@@ -22,18 +23,9 @@ class SmsReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION) return
+        if (Telephony.Sms.getDefaultSmsPackage(context) == context.packageName) return
 
-        val pdus = try {
-            Telephony.Sms.Intents.getMessagesFromIntent(intent)
-                ?.filterNotNull()
-                ?.map { IncomingPdu(it.displayOriginatingAddress, it.displayMessageBody.orEmpty(), it.timestampMillis) }
-        } catch (e: RuntimeException) {
-            AppLog.w(TAG, "could not parse incoming SMS PDUs", e)
-            null
-        }
-        if (pdus.isNullOrEmpty()) return
-
-        val messages = IncomingSmsAssembler.assemble(pdus, System.currentTimeMillis(), subscriptionIdOf(intent))
+        val messages = SmsIntentParser.parse(intent) ?: return
         val entryPoint = EntryPointAccessors.fromApplication(context.applicationContext, ReceiverEntryPoint::class.java)
         val pendingResult = goAsync()
 
@@ -56,15 +48,8 @@ class SmsReceiver : BroadcastReceiver() {
         }
     }
 
-    private fun subscriptionIdOf(intent: Intent): Int? =
-        listOf(SubscriptionManager.EXTRA_SUBSCRIPTION_INDEX, LEGACY_SUBSCRIPTION_EXTRA)
-            .firstNotNullOfOrNull { key ->
-                intent.getIntExtra(key, SubscriptionManager.INVALID_SUBSCRIPTION_ID).takeIf { it >= 0 }
-            }
-
     private companion object {
         const val TAG = "SmsReceiver"
-        const val LEGACY_SUBSCRIPTION_EXTRA = "subscription"
 
         /** Well under the ~10 s budget Android gives a goAsync() receiver. */
         const val CAPTURE_TIMEOUT_MS = 8_000L
@@ -72,6 +57,80 @@ class SmsReceiver : BroadcastReceiver() {
         /** Gives the default SMS app time to write its provider row before we link to it. */
         const val RECONCILE_DELAY_MS = 30_000L
     }
+}
+
+/**
+ * Default SMS app mode: receives `SMS_DELIVER`. SMS Bridge is now the only app that stores the
+ * message in the Telephony provider and the only one that notifies the user, so both happen here.
+ */
+class SmsDeliverReceiver : BroadcastReceiver() {
+
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action != Telephony.Sms.Intents.SMS_DELIVER_ACTION) return
+        val messages = SmsIntentParser.parse(intent) ?: return
+        val entryPoint = EntryPointAccessors.fromApplication(context.applicationContext, ReceiverEntryPoint::class.java)
+        val pendingResult = goAsync()
+
+        entryPoint.applicationScope().launch {
+            try {
+                withTimeout(8_000L) {
+                    messages.forEach { sms ->
+                        val messageId = entryPoint.smsRepository().recordDelivered(sms)
+                        entryPoint.messageNotifier().notifyIncoming(messageId, sms)
+                    }
+                }
+                AppLog.i(TAG, "delivered ${messages.size} message(s)")
+            } catch (e: Exception) {
+                AppLog.e(TAG, "failed to store delivered message", e)
+            } finally {
+                entryPoint.syncScheduler().scheduleSync()
+                pendingResult.finish()
+            }
+        }
+    }
+
+    private companion object {
+        const val TAG = "SmsDeliver"
+    }
+}
+
+/**
+ * Required for the SMS role. SMS Bridge supports SMS only, so an incoming MMS notification
+ * is not downloaded. The user is told immediately so they can switch back to an MMS-capable app.
+ */
+class MmsWapPushReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action != Telephony.Sms.Intents.WAP_PUSH_DELIVER_ACTION) return
+        AppLog.w("MmsPush", "MMS notification received; MMS is not supported")
+        EntryPointAccessors.fromApplication(context.applicationContext, ReceiverEntryPoint::class.java)
+            .messageNotifier()
+            .notifyMmsUnsupported()
+    }
+}
+
+/** Turns an SMS broadcast into assembled messages. Returns null when there is nothing usable. */
+object SmsIntentParser {
+    private const val TAG = "SmsIntentParser"
+    private const val LEGACY_SUBSCRIPTION_EXTRA = "subscription"
+
+    fun parse(intent: Intent, receivedAt: Long = System.currentTimeMillis()): List<IncomingSms>? {
+        val pdus = try {
+            Telephony.Sms.Intents.getMessagesFromIntent(intent)
+                ?.filterNotNull()
+                ?.map { IncomingPdu(it.displayOriginatingAddress, it.displayMessageBody.orEmpty(), it.timestampMillis) }
+        } catch (e: RuntimeException) {
+            AppLog.w(TAG, "could not parse SMS PDUs", e)
+            null
+        }
+        if (pdus.isNullOrEmpty()) return null
+        return IncomingSmsAssembler.assemble(pdus, receivedAt, subscriptionIdOf(intent))
+    }
+
+    private fun subscriptionIdOf(intent: Intent): Int? =
+        listOf(SubscriptionManager.EXTRA_SUBSCRIPTION_INDEX, LEGACY_SUBSCRIPTION_EXTRA)
+            .firstNotNullOfOrNull { key ->
+                intent.getIntExtra(key, SubscriptionManager.INVALID_SUBSCRIPTION_ID).takeIf { it >= 0 }
+            }
 }
 
 /** One PDU segment's worth of data. */

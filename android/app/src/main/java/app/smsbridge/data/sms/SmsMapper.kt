@@ -1,6 +1,7 @@
 package app.smsbridge.data.sms
 
 import app.smsbridge.core.database.entity.SmsMessageEntity
+import app.smsbridge.core.model.AddressKey
 import app.smsbridge.core.model.CaptureOrigin
 import app.smsbridge.core.model.SmsMessage
 import app.smsbridge.core.model.SmsType
@@ -41,6 +42,7 @@ object SmsMapper {
             origin = CaptureOrigin.PROVIDER_SCAN,
             createdAt = now,
             updatedAt = now,
+            addressKey = AddressKey.of(sms.address),
         )
 
     fun newFromIncoming(sms: IncomingSms, id: String, sourceDeviceId: String, now: Long): SmsMessageEntity =
@@ -64,6 +66,7 @@ object SmsMapper {
             origin = CaptureOrigin.INCOMING_BROADCAST,
             createdAt = now,
             updatedAt = now,
+            addressKey = AddressKey.of(sms.address),
         )
 
     /**
@@ -101,5 +104,8 @@ object SmsMapper {
         subscriptionId = subscriptionId,
         sourceDeviceId = sourceDeviceId,
         fingerprint = fingerprint,
+        addressKey = addressKey,
+        deliveryStatus = status,
+        errorCode = errorCode,
     )
 }

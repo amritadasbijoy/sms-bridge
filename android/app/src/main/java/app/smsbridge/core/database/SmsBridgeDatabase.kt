@@ -5,6 +5,8 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
+import app.smsbridge.core.model.AddressKey
 import app.smsbridge.core.database.dao.AppSettingDao
 import app.smsbridge.core.database.dao.DeviceDao
 import app.smsbridge.core.database.dao.SmsMessageDao
@@ -46,7 +48,7 @@ abstract class SmsBridgeDatabase : RoomDatabase() {
 
     companion object {
         const val NAME = "sms_bridge.db"
-        const val VERSION = 1
+        const val VERSION = 2
     }
 }
 
@@ -56,7 +58,29 @@ abstract class SmsBridgeDatabase : RoomDatabase() {
  * a failed migration must crash loudly rather than wipe the user's archive.
  */
 object SmsBridgeMigrations {
-    val ALL: Array<Migration> = emptyArray()
+    /** v2: conversation grouping key. Backfilled in Kotlin so it matches the app's normalization exactly. */
+    val MIGRATION_1_2 = object : Migration(1, 2) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `sms_messages` ADD COLUMN `address_key` TEXT NOT NULL DEFAULT ''")
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_sms_messages_address_key_date` ON `sms_messages` (`address_key`, `date`)",
+            )
+            val keys = HashMap<String, String>()
+            db.query("SELECT DISTINCT `address` FROM `sms_messages` WHERE `address` IS NOT NULL").use { c ->
+                while (c.moveToNext()) {
+                    val address = c.getString(0)
+                    keys[address] = AddressKey.of(address)
+                }
+            }
+            keys.forEach { (address, key) ->
+                if (key.isNotEmpty()) {
+                    db.execSQL("UPDATE `sms_messages` SET `address_key` = ? WHERE `address` = ?", arrayOf<Any>(key, address))
+                }
+            }
+        }
+    }
+
+    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2)
 }
 
 @Module

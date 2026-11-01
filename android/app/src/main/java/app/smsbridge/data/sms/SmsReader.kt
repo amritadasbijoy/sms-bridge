@@ -19,6 +19,8 @@ class SmsReader @Inject constructor(private val source: SmsSource) {
         }
     }
 
+    suspend fun readOne(providerId: Long): ProviderSms? = source.readById(providerId)
+
     companion object {
         const val DEFAULT_PAGE_SIZE = 500
     }
