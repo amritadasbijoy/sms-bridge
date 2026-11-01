@@ -13,6 +13,7 @@ import app.smsbridge.core.database.dao.DeviceDao
 import app.smsbridge.core.database.dao.SmsMessageDao
 import app.smsbridge.core.database.dao.SyncCheckpointDao
 import app.smsbridge.core.database.dao.SyncOperationDao
+import app.smsbridge.core.database.dao.TransferSessionDao
 import app.smsbridge.core.database.entity.AppSettingEntity
 import app.smsbridge.core.database.entity.BackupHistoryEntity
 import app.smsbridge.core.database.entity.DeviceEntity
@@ -47,6 +48,7 @@ abstract class SmsBridgeDatabase : RoomDatabase() {
     abstract fun deviceDao(): DeviceDao
     abstract fun appSettingDao(): AppSettingDao
     abstract fun backupHistoryDao(): BackupHistoryDao
+    abstract fun transferSessionDao(): TransferSessionDao
 
     companion object {
         const val NAME = "sms_bridge.db"

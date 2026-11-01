@@ -190,6 +190,37 @@ Selective by direction and by date range. There are two targets:
 Re-running an interrupted restore is safe (everything already present is skipped). An
 interrupted export leaves a package without a manifest, which validation rejects.
 
+## Wi-Fi transfer (Phase 4b)
+
+```
+Receiver (B)                                    Sender (A)
+Keystore EC key + self-signed cert
+SSLServerSocket(0)  ── QR: smsbridge://pair?v=1&h=IP&p=PORT&fp=SHA256(cert)&t=TOKEN ──▶ scan / paste
+                    ◀────────── TLS (cert pinned to fp) ──────────
+        HELLO {v, token, deviceId, deviceName}      ◀──
+    ──▶ WELCOME {deviceName}                               (A: user confirms "Send N?")
+        INIT {transferId, total, batchSize}         ◀──
+ (B: user confirms "Accept N?")
+    ──▶ READY {resumeFrom}
+        BATCH {seq, sha256, payload}                ◀──    repeated, stop-and-wait
+    ──▶ ACK {seq}   (after RestoreSession.apply + transfer_sessions.last_batch_sequence)
+        DONE                                        ◀──
+    ──▶ RESULT {read, restored, duplicates, draftsSkipped}
+```
+
+- **Frames:** `u32 length | UTF-8 JSON`, at most 8 MiB. `ERROR {code, reason}` aborts with a user-facing reason.
+- **Batches:** fixed-size pages (200 by default) of a `rowid` snapshot of the sender's archive, so
+  batch *n* is identical on every attempt.
+- **Resume:** the receiver persists `last_batch_sequence` per `transferId`. A reconnect with the same
+  id (the sender's "Resume" button) gets `READY {resumeFrom = last + 1}`. Re-sent, already committed
+  batches are acknowledged without being applied again.
+- **Shared rules:** the receiver applies batches through the same `RestoreSession` as file restore
+  (archive or phone target, duplicate skipping, drafts never into the phone, OUTBOX restored as FAILED).
+- **Process model:** `TransferManager` (singleton, application scope) owns both sides, so leaving the
+  screen does not stop a transfer. The screen is kept on while active. No foreground service.
+- **Code:** the engines (`TransferServer`, `TransferClient`) are plain Kotlin and tested end to end over
+  localhost TLS with test identities (`app/src/test/resources/test-tls-*.p12`, test-only keys).
+
 ## Local database (Room, schema v2)
 
 | Table | Purpose |

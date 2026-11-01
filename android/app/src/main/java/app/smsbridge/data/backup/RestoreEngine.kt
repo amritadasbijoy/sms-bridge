@@ -43,65 +43,92 @@ data class RestoreResult(
     val selected: Int,
     val restored: Int,
     val duplicates: Int,
-    /** Drafts are never written into the phone's SMS database (see [RestoreEngine]). */
+    /** Drafts are never written into the phone's SMS database (see [RestoreSession]). */
     val draftsSkipped: Int = 0,
 ) {
     val notSelected: Int get() = read - selected
 }
 
+/** Counts for one applied batch. */
+data class BatchOutcome(val restored: Int, val duplicates: Int, val draftsSkipped: Int)
+
 /**
- * Restores a backup selectively. Safe to re-run after an interruption: everything already
- * present (same fingerprint) is skipped, so nothing is duplicated and nothing is overwritten.
+ * One restore in progress: batches from a backup file or from a Wi-Fi transfer are applied with
+ * the same rules. Safe to re-apply a batch: everything already present (same fingerprint) is
+ * skipped, so nothing is duplicated and nothing is overwritten.
  */
+class RestoreSession internal constructor(
+    private val repository: SmsRepository,
+    private val providerWriter: SmsProviderWriter,
+    val options: RestoreOptions,
+    private val emitSyncEvents: Boolean,
+    /** For the phone target: fingerprints the phone already holds, plus everything applied so far. */
+    private val seen: MutableSet<String>?,
+) {
+    var read = 0
+        private set
+    var selected = 0
+        private set
+    var restored = 0
+        private set
+    var duplicates = 0
+        private set
+    var draftsSkipped = 0
+        private set
+
+    suspend fun apply(batch: List<BackupRecord>): BatchOutcome {
+        read += batch.size
+        val chosen = batch.filter(options::accepts)
+        selected += chosen.size
+        val outcome = when (options.target) {
+            RestoreTarget.ARCHIVE -> {
+                val inserted = repository.importToArchive(chosen.map { it.toImported() }, emitSyncEvents)
+                BatchOutcome(inserted, chosen.size - inserted, 0)
+            }
+            RestoreTarget.PHONE -> {
+                // Android's Telephony provider keeps at most one draft per conversation and
+                // silently deletes the older ones, so restoring drafts there would lose data
+                // while reporting success. Drafts stay restorable into the archive.
+                val (drafts, messagesOnly) = chosen.partition { it.type == SmsType.DRAFT }
+                val fresh = messagesOnly.filter { seen!!.add(it.fingerprint()) }
+                val inserted = providerWriter.insertRestored(fresh.map { it.toRestored() })
+                check(inserted == fresh.size) {
+                    "the phone accepted $inserted of ${fresh.size} messages (is SMS Bridge still the default SMS app?)"
+                }
+                BatchOutcome(inserted, messagesOnly.size - fresh.size, drafts.size)
+            }
+        }
+        restored += outcome.restored
+        duplicates += outcome.duplicates
+        draftsSkipped += outcome.draftsSkipped
+        return outcome
+    }
+
+    fun result() = RestoreResult(read, selected, restored, duplicates, draftsSkipped)
+}
+
 class RestoreEngine @Inject constructor(
     private val repository: SmsRepository,
     private val reader: SmsReader,
     private val providerWriter: SmsProviderWriter,
 ) {
+    suspend fun newSession(options: RestoreOptions, emitSyncEvents: Boolean): RestoreSession {
+        val seen = if (options.target == RestoreTarget.PHONE) phoneFingerprints() else null
+        return RestoreSession(repository, providerWriter, options, emitSyncEvents, seen)
+    }
+
     suspend fun restore(
         messages: InputStream,
         options: RestoreOptions,
         emitSyncEvents: Boolean,
         onProgress: suspend (read: Int, restored: Int) -> Unit = { _, _ -> },
     ): RestoreResult {
-        // For the phone target, fingerprints of what the phone already holds; also catches
-        // duplicates inside the backup file itself.
-        val seen: MutableSet<String>? = if (options.target == RestoreTarget.PHONE) phoneFingerprints() else null
-
-        var read = 0
-        var selected = 0
-        var restored = 0
-        var duplicates = 0
-        var draftsSkipped = 0
-        val xml = SmsXmlReader(messages)
-        xml.asSequence().chunked(BATCH).forEach { batch ->
-            read += batch.size
-            val chosen = batch.filter(options::accepts)
-            selected += chosen.size
-            when (options.target) {
-                RestoreTarget.ARCHIVE -> {
-                    val inserted = repository.importToArchive(chosen.map { it.toImported() }, emitSyncEvents)
-                    restored += inserted
-                    duplicates += chosen.size - inserted
-                }
-                RestoreTarget.PHONE -> {
-                    // Android's Telephony provider keeps at most one draft per conversation and
-                    // silently deletes the older ones, so restoring drafts there would lose
-                    // data while reporting success. Drafts stay restorable into the archive.
-                    val (drafts, messagesOnly) = chosen.partition { it.type == SmsType.DRAFT }
-                    draftsSkipped += drafts.size
-                    val fresh = messagesOnly.filter { seen!!.add(it.fingerprint()) }
-                    duplicates += messagesOnly.size - fresh.size
-                    val inserted = providerWriter.insertRestored(fresh.map { it.toRestored() })
-                    check(inserted == fresh.size) {
-                        "the phone accepted $inserted of ${fresh.size} messages (is SMS Bridge still the default SMS app?)"
-                    }
-                    restored += inserted
-                }
-            }
-            onProgress(read, restored)
+        val session = newSession(options, emitSyncEvents)
+        SmsXmlReader(messages).asSequence().chunked(BATCH).forEach { batch ->
+            session.apply(batch)
+            onProgress(session.read, session.restored)
         }
-        return RestoreResult(read, selected, restored, duplicates, draftsSkipped)
+        return session.result()
     }
 
     private suspend fun phoneFingerprints(): MutableSet<String> {

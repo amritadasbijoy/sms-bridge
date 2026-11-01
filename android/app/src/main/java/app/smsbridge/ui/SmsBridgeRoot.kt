@@ -28,6 +28,7 @@ import androidx.annotation.DrawableRes
 import androidx.compose.ui.res.painterResource
 import app.smsbridge.R
 import app.smsbridge.feature.backup.BackupScreen
+import app.smsbridge.feature.transfer.TransferScreen
 import app.smsbridge.feature.dashboard.DashboardScreen
 import app.smsbridge.feature.messages.ComposeScreen
 import app.smsbridge.feature.messages.MessagesScreen
@@ -42,6 +43,7 @@ enum class TopDestination(val route: String, val label: String, val icon: ImageV
     HOME(Routes.HOME, "Home", Icons.Filled.Home),
     MESSAGES(Routes.MESSAGES, "Messages", Icons.Filled.Email),
     BACKUP(Routes.BACKUP, "Backup", null, R.drawable.ic_backup),
+    TRANSFER(Routes.TRANSFER, "Transfer", null, R.drawable.ic_transfer),
     SETTINGS(Routes.SETTINGS, "Settings", Icons.Filled.Settings),
 }
 
@@ -96,6 +98,7 @@ fun SmsBridgeRoot(navigationRequests: NavigationRequests) {
                 )
             }
             composable(Routes.BACKUP) { BackupScreen() }
+            composable(Routes.TRANSFER) { TransferScreen() }
             composable(Routes.SETTINGS) { SettingsScreen() }
             composable(
                 Routes.THREAD,

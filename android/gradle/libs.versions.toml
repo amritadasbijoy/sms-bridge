@@ -15,6 +15,7 @@ work = "2.9.0"
 paging = "3.2.1"
 coroutines = "1.8.0"
 tink = "1.13.0"
+zxingEmbedded = "4.3.0"
 junit = "4.13.2"
 robolectric = "4.12.2"
 androidxTestCore = "1.5.0"
@@ -49,7 +50,8 @@ androidx-room-testing = { module = "androidx.room:room-testing", version.ref = "
 androidx-work-runtime-ktx = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
 androidx-paging-compose = { module = "androidx.paging:paging-compose", version.ref = "paging" }
 
-tink-android = { module = "com.google.crypto.tink:tink-android", version.ref = "tink" }
+zxing-android-embedded = { module = "com.journeyapps:zxing-android-embedded", version.ref = "zxingEmbedded" }
+tink-android ={ module = "com.google.crypto.tink:tink-android", version.ref = "tink" }
 kotlinx-coroutines-android ={ module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
 kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
 

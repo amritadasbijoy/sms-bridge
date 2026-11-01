@@ -17,7 +17,7 @@
 | `allowBackup=false`: archive is excluded from Google/device backup | `AndroidManifest.xml` |
 | Single logging facade; exceptions reduced to class name; `toString()` of every SMS type redacted (tested) | `AppLog`, `RedactionTest` |
 | Release builds strip `Log.v/d/i` | `proguard-rules.pro` |
-| No `INTERNET` permission in Phase 1: the app physically cannot upload (verified in the merged manifest; WorkManager adds only `WAKE_LOCK`, `ACCESS_NETWORK_STATE`, `FOREGROUND_SERVICE`) | `AndroidManifest.xml` |
+| No `INTERNET` permission in Phases 1–4a. **Since Phase 4b `INTERNET` is present**, used only for local Wi-Fi TLS sockets between two paired phones (see Phase 4b below); there is still no server or other network call | `AndroidManifest.xml` |
 | Archive never deletes rows; provider id reuse unlinks instead of overwriting (tested) | `SmsRepository` |
 | No destructive Room migration fallback | `SmsBridgeDatabase` |
 | Test fixtures are synthetic | `Synthetic.kt` |
@@ -66,6 +66,30 @@ Known limitations:
 - Compose `TextField` holds the passphrase as an immutable `String` while typing, which cannot be wiped.
 - PBKDF2 is less resistant to GPU attacks than Argon2id. Use a long passphrase; Argon2id is a candidate once a reviewed Android implementation is adopted.
 - There is no recovery: a forgotten passphrase means the backup cannot be opened. This is by design, and the UI says so.
+
+## Phase 4b: Wi-Fi device-to-device transfer
+
+Trust model: **physical proximity**. The receiver shows a QR code, and only a phone that scanned
+it (or was handed its pairing link) can connect and send.
+
+| Control | Design |
+|---|---|
+| Receiver identity | Fresh EC P-256 key generated **inside Android Keystore** per receive session, with a self-signed certificate valid for 2 days; deleted when the session ends |
+| Server authentication | Sender pins the SHA-256 fingerprint of that certificate from the QR code (`PinnedTrustManager`, constant-time compare). No CAs, no host names; any other certificate fails the TLS handshake before data is sent |
+| Sender authentication | 32-byte random one-time token in the QR code, checked in constant time inside TLS; 5 wrong tokens stop the session |
+| Transport | TLS 1.3 (1.2 fallback) via the platform provider. No plaintext socket exists |
+| Consent | Sender confirms "Send N messages to <device>?"; receiver confirms "<device> wants to send N messages"; declining ends the session |
+| Integrity | Every batch carries a SHA-256 of its payload; batches must arrive in order; each is acknowledged only after it is committed |
+| Data safety | Same duplicate rules as restore; nothing is deleted or overwritten; drafts are never written into the phone's SMS database |
+| Limits | Frames above 8 MiB and batches above 1,000 messages are refused (memory-exhaustion guard) |
+| Leakage | The token is never logged (`PairingLink.toString()` hides it); the copied pairing link is marked sensitive on the clipboard; logs contain counts and exception classes only |
+| Permissions | `INTERNET` (local sockets only); `CAMERA` only when "Scan QR code" is tapped (requested by the scanner) |
+
+Known limitations:
+- Anyone who obtains the QR or link while the session is open can send messages *to* this phone
+  (never read from it). The UI warns not to share it; the session ends after one transfer.
+- The receiver listens on all interfaces of the current network while the screen is open.
+- No discovery yet (mDNS/NSD): the QR carries the IP address. Wi-Fi Direct is deferred.
 
 ### Known Phase 1 gaps
 

@@ -8,7 +8,7 @@ Phases run in order; each must pass its acceptance criteria before the next star
 | 2 | Default SMS handler (SMS_DELIVER, send UI, multipart send, delivery reports, RoleManager flow), two-way capture | **Done: send/receive/multipart/role switch verified on Galaxy A52 (Android 14)** |
 | 2.x | Note for users: switching from Google Messages disables RCS until switched back | Documented |
 | 3 | Backup package (manifest.json, messages.xml, metadata.json, checksums.sha256), JSON/CSV export, SAF, restore with temporary default-role guidance | **Done: backup/export verified on device; restore verified in tests only (owner choice)** |
-| 4 | Encrypted backup archive, Wi-Fi transfer (NSD + TLS + QR pairing, resumable batches), then Wi-Fi Direct | **4a encrypted backup: done (emulator-verified). 4b Wi-Fi transfer: next** |
+| 4 | Encrypted backup archive, Wi-Fi transfer (NSD + TLS + QR pairing, resumable batches), then Wi-Fi Direct | **Done (emulator-verified): 4a encrypted backup, 4b Wi-Fi transfer (QR + pinned TLS, resumable). Deferred: NSD discovery, Wi-Fi Direct** |
 | 5 | Ktor backend, PostgreSQL, auth, device registration, OpenAPI, Docker Compose | |
 | 6 | Encrypted event upload, server sequence, acks, checkpoints, WebSocket notify | |
 | 7 | Next.js dashboard, browser vault unlock, client-side decryption | |

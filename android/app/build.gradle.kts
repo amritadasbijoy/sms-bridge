@@ -95,6 +95,8 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     // Streaming AEAD for encrypted backups (reviewed implementation, no custom crypto).
     implementation(libs.tink.android)
+    // QR pairing for device-to-device transfer (Apache-2.0, no Google services needed).
+    implementation(libs.zxing.android.embedded)
 
     testImplementation(libs.junit)
     testImplementation(libs.robolectric)

@@ -17,6 +17,15 @@
     <uses-permission android:name="android.permission.SEND_SMS" />
     <!-- New-message notifications in default SMS app mode (runtime permission on Android 13+). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!--
+        Device-to-device transfer over the local Wi-Fi (Phase 4b): TLS sockets between two paired
+        phones only. SMS Bridge makes no other network connections.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- QR scanning for pairing (requested only when the user taps "Scan"). Camera is optional. -->
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
 
     <application
         android:name=".SmsBridgeApp"
