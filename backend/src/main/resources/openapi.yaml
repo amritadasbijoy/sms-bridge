@@ -36,6 +36,7 @@ components:
         username: { type: string, pattern: '^[A-Za-z0-9._-]{3,64}$' }
         password: { type: string, minLength: 12, maxLength: 256 }
         totp: { type: string, nullable: true, description: 6-digit authenticator code; needed when 2FA is on and this browser is not remembered }
+        invite: { type: string, nullable: true, description: Invite code; required to register once an account exists (unless open registration is enabled) }
     Me:
       type: object
       properties:
@@ -306,3 +307,34 @@ paths:
       security: [{ device: [] }, { session: [] }]
       responses:
         '101': { description: Switching protocols }
+  /api/v1/browser/devices:
+    post:
+      summary: Register this signed-in browser as a device (X25519 + Ed25519 public keys); a trusted phone approves it
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/csrf' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [name, encPublicKey, signPublicKey], properties: { name: { type: string }, encPublicKey: { type: string, format: byte }, signPublicKey: { type: string, format: byte } } } } } }
+      responses:
+        '201': { description: Registered, content: { application/json: { schema: { type: object, properties: { deviceId: { type: string, format: uuid } } } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '409': { description: Too many browsers waiting for approval (5) }
+  /api/v1/browser/devices/{id}/keys:
+    get:
+      summary: Vault keys HPKE-wrapped for this browser (empty until a phone approves it); 404 once revoked
+      security: [{ session: [] }]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { trusted: { type: boolean }, currentVersion: { type: integer, nullable: true }, keys: { type: array, items: { $ref: '#/components/schemas/WrappedKey' } } } } } } }
+        '404': { $ref: '#/components/responses/Error' }
+  /api/v1/invites:
+    get:
+      summary: Invites this account created (codes are never shown again)
+      security: [{ session: [] }]
+      responses:
+        '200': { description: OK }
+    post:
+      summary: Create a one-time invite code (7 days; at most 10 unused)
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/csrf' }]
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { type: object, properties: { code: { type: string }, expiresAt: { type: string, format: date-time } } } } } }
+        '409': { $ref: '#/components/responses/Error' }

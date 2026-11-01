@@ -261,7 +261,9 @@ Router export has no inline executable scripts).
 
 ```
 sign in (password [+ TOTP on a new browser]) ──▶ sb_session cookie (+ sb_browser after a code)
-recovery key (typed) ── Crockford base32 ──▶ 16 bytes
+approved browser: IndexedDB X25519 key (non-extractable) ── HPKE open (WebCrypto) ──▶ vault key
+   (first visit: POST /browser/devices → phone approves by safety code → GET /browser/devices/{id}/keys)
+or recovery key (typed) ── Crockford base32 ──▶ 16 bytes
 GET /vault/browser ──▶ recovery-wrapped vault keys ── HKDF + AES-GCM (WebCrypto) ──▶ non-extractable CryptoKey
 GET /sync/events?after=n (pages of 1000) ──▶ AES-256-GCM decrypt with AAD ──▶ payload JSON
 WebSocket /sync/stream ──▶ {"latest":n} ──▶ fetch the new pages

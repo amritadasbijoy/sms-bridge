@@ -51,7 +51,7 @@ fun main() {
 // ---- API types -------------------------------------------------------------------------------
 
 @Serializable data class ApiError(val error: String, val message: String)
-@Serializable data class Credentials(val username: String, val password: String, val totp: String? = null)
+@Serializable data class Credentials(val username: String, val password: String, val totp: String? = null, val invite: String? = null)
 @Serializable data class Me(val userId: String, val username: String, val totpEnabled: Boolean = false)
 @Serializable data class AuthStatus(val registrationOpen: Boolean)
 @Serializable data class PairingCodeResponse(val code: String, val expiresAt: String)
@@ -135,6 +135,8 @@ fun Application.module(config: Config, db: Db) {
     val auth = AuthService(db, config, twoFactor)
     val devices = DeviceService(db)
     val sync = SyncService(db)
+    val browsers = BrowserDeviceService(db)
+    val invites = InviteService(db)
     install(io.ktor.server.websocket.WebSockets) { pingPeriodMillis = 30_000 }
 
     routing {
@@ -151,6 +153,7 @@ fun Application.module(config: Config, db: Db) {
             deviceRoutes(auth, devices)
             vaultAndSyncRoutes(auth, sync)
             twoFactorRoutes(auth, twoFactor, db)
+            browserAndInviteRoutes(auth, browsers, invites)
         }
     }
 }
@@ -162,7 +165,7 @@ private fun Route.authRoutes(auth: AuthService, config: Config) = route("/auth")
     rateLimit(AUTH_LIMIT) {
         post("/register") {
             val body = call.receive<Credentials>()
-            val userId = auth.register(body.username, body.password.toCharArray(), call.ip())
+            val userId = auth.register(body.username, body.password.toCharArray(), call.ip(), body.invite)
             val token = auth.createSession(userId, call.request.header(HttpHeaders.UserAgent))
             call.setSessionCookie(token, config)
             call.respond(HttpStatusCode.Created, Me(userId.toString(), body.username.trim()))
@@ -228,7 +231,7 @@ class AuthService(private val db: Db, private val config: Config, val twoFactor:
     suspend fun registrationOpen(): Boolean =
         config.allowRegistration || db.tx { query("SELECT count(*) FROM users") { it.getLong(1) }.single() == 0L }
 
-    suspend fun register(username: String, password: CharArray, ip: String): UUID {
+    suspend fun register(username: String, password: CharArray, ip: String, invite: String? = null): UUID {
         val name = username.trim()
         if (!Regex("[A-Za-z0-9._-]{3,64}").matches(name)) {
             throw ApiException(HttpStatusCode.BadRequest, "invalid_username", "Use 3–64 letters, digits, dots, dashes or underscores.")
@@ -242,13 +245,18 @@ class AuthService(private val db: Db, private val config: Config, val twoFactor:
             // Serialise first-account creation so two simultaneous requests cannot both succeed.
             update("LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE")
             val count = query("SELECT count(*) FROM users") { it.getLong(1) }.single()
-            if (count > 0 && !config.allowRegistration) {
-                throw ApiException(HttpStatusCode.Forbidden, "registration_closed", "Registration is closed on this server.")
-            }
             if (query("SELECT 1 FROM users WHERE lower(username) = lower(?)", name) { 1 }.isNotEmpty()) {
                 throw ApiException(HttpStatusCode.Conflict, "username_taken", "That username is taken.")
             }
             update("INSERT INTO users (id, username, password_hash) VALUES (?, ?, ?)", id, name, hash)
+            // After the first account: open registration, or a valid unused invite (consumed here, in the same transaction).
+            if (count > 0 && !config.allowRegistration && !consumeInvite(invite, id)) {
+                throw ApiException(
+                    HttpStatusCode.Forbidden,
+                    if (invite.isNullOrBlank()) "registration_closed" else "invalid_invite",
+                    if (invite.isNullOrBlank()) "Registration is closed on this server. Ask the owner for an invite code." else "The invite code is wrong, used or expired.",
+                )
+            }
             update("INSERT INTO account_settings (user_id) VALUES (?)", id)
             audit(id, null, "register", "ok", ip)
             id

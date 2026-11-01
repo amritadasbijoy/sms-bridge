@@ -17,6 +17,7 @@ export default function Login() {
   const [needCode, setNeedCode] = useState(false);
   const [registrationOpen, setRegistrationOpen] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [invite, setInvite] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const codeRef = useRef<HTMLInputElement>(null);
@@ -36,7 +37,8 @@ export default function Login() {
     setError(null);
     setBusy(true);
     try {
-      if (creating) await api.register(username, password);
+      if (creating && invite.trim()) await api.registerWithInvite(username, password, invite);
+      else if (creating) await api.register(username, password);
       else await api.login(username, password, needCode ? code : undefined);
       setPassword("");
       setCode("");
@@ -62,7 +64,7 @@ export default function Login() {
       </Head>
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle>{creating ? "Create the owner account" : "Sign in to SMS Bridge"}</CardTitle>
+          <CardTitle>{creating ? (registrationOpen ? "Create the owner account" : "Create your account") : "Sign in to SMS Bridge"}</CardTitle>
           <CardDescription>
             {needCode ? "Enter the 6-digit code from your authenticator app." : "Your self-hosted message dashboard."}
           </CardDescription>
@@ -88,6 +90,21 @@ export default function Login() {
                   />
                   {creating && <p className="text-xs text-muted-foreground">At least 12 characters.</p>}
                 </div>
+                {creating && !registrationOpen && (
+                  <div className="space-y-2">
+                    <Label htmlFor="invite">Invite code</Label>
+                    <Input
+                      id="invite"
+                      value={invite}
+                      onChange={(e) => setInvite(e.target.value)}
+                      placeholder="XXXXX-XXXXX"
+                      autoCapitalize="characters"
+                      spellCheck={false}
+                      className="font-mono"
+                      required
+                    />
+                  </div>
+                )}
               </>
             )}
             {needCode && (
@@ -115,9 +132,9 @@ export default function Login() {
                 Back
               </Button>
             )}
-            {registrationOpen && !needCode && (
-              <Button type="button" variant="ghost" className="w-full" onClick={() => setCreating((c) => !c)}>
-                {creating ? "I already have an account" : "Create an account"}
+            {!needCode && (
+              <Button type="button" variant="ghost" className="w-full" onClick={() => { setCreating((c) => !c); setError(null); }}>
+                {creating ? "I already have an account" : registrationOpen ? "Create an account" : "I have an invite code"}
               </Button>
             )}
           </form>

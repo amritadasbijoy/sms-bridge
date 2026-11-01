@@ -282,7 +282,7 @@ private fun ApprovalsCard(viewModel: SyncViewModel, busy: Boolean) {
     LaunchedEffect(Unit) { viewModel.loadApprovals() }
     SectionCard("Devices waiting for approval") {
         if (approvals.isEmpty()) {
-            Text("None. When you connect another phone, it appears here.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
+            Text("None. When you connect another phone or open the web dashboard in a new browser, it appears here.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
         }
         approvals.forEach { request ->
             Column(Modifier.padding(top = 8.dp)) {

@@ -66,4 +66,12 @@ export const api = {
   forgetBrowsers: () => request<void>("POST", "/auth/browsers/forget", {}),
   browserVault: () => request<BrowserVault>("GET", "/vault/browser"),
   events: (after: number, limit = 1000) => request<EventsPage>("GET", `/sync/events?after=${after}&limit=${limit}`),
+  registerBrowser: (encPublicKey: string, signPublicKey: string) =>
+    request<{ deviceId: string }>("POST", "/browser/devices", { name: "", encPublicKey, signPublicKey }),
+  browserKeys: (deviceId: string) =>
+    request<{ trusted: boolean; currentVersion: number | null; keys: WrappedKey[] }>("GET", `/browser/devices/${encodeURIComponent(deviceId)}/keys`),
+  invites: () => request<{ createdAt: string; expiresAt: string; used: boolean; usedAt: string | null }[]>("GET", "/invites"),
+  createInvite: () => request<{ code: string; expiresAt: string }>("POST", "/invites", {}),
+  registerWithInvite: (username: string, password: string, invite: string) =>
+    request<Me>("POST", "/auth/register", { username, password, invite }),
 };

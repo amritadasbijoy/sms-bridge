@@ -64,7 +64,7 @@ export default function Devices() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Phones</CardTitle>
+            <CardTitle>Phones and browsers</CardTitle>
             <CardDescription>
               A new phone can read synced messages only after an approved phone checks its safety code, or after it is
               unlocked with the recovery key.
@@ -74,7 +74,7 @@ export default function Devices() {
             {!devices ? (
               <p className="text-sm text-muted-foreground">Loading…</p>
             ) : devices.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No phones connected yet.</p>
+              <p className="text-sm text-muted-foreground">No devices connected yet.</p>
             ) : (
               <ul className="divide-y">
                 {devices.map((d) => (
@@ -82,12 +82,13 @@ export default function Devices() {
                     <div className="space-y-1">
                       <div className="flex items-center gap-2">
                         <span className="font-medium">{d.name}</span>
+                        <span className="text-xs text-muted-foreground">{d.platform === "web" ? "Browser" : "Phone"}</span>
                         {d.revokedAt ? (
                           <Badge variant="destructive">Revoked</Badge>
                         ) : d.vaultTrusted ? (
                           <Badge>Approved</Badge>
                         ) : (
-                          <Badge variant="secondary">Waiting for approval</Badge>
+                          <Badge variant="secondary">{d.platform === "web" ? "Approve on a phone" : "Waiting for approval"}</Badge>
                         )}
                       </div>
                       <p className="text-xs text-muted-foreground">

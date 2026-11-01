@@ -1,10 +1,16 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, ApiError, type Me, type StoredEvent } from "./api";
+import { deviceSafetyCode, ensureDevice, fetchVaultKeys, forgetLocal } from "./browser-device";
 import { base64ToBytes, decryptEvent, parseRecoveryKey, unlockVaultKey } from "./crypto";
 import { buildMessages, type DecryptedEvent, type EventPayload, type MessageStore } from "./messages";
 
 type VaultState =
   | { status: "locked" }
+  | { status: "connecting" }
+  /** No phone has turned on sync for this account yet, so there is nothing to open. */
+  | { status: "empty" }
+  /** This browser waits for a phone to approve it; the phone must show the same code. */
+  | { status: "approval"; safetyCode: string }
   | { status: "unlocking" }
   | { status: "loading"; loaded: number }
   | { status: "ready" };
@@ -16,6 +22,10 @@ interface Session {
   vault: VaultState;
   vaultError: string | null;
   unlock: (recoveryKey: string) => Promise<boolean>;
+  /** Opens the vault with this browser's own approved key (no recovery key). */
+  openWithBrowser: () => Promise<void>;
+  /** Revokes this browser's approval and forgets its key. */
+  forgetBrowser: () => Promise<void>;
   lock: () => void;
   store: MessageStore;
   undecryptable: number;
@@ -144,6 +154,93 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     };
   }, [pull]);
 
+  const load = useCallback(
+    async (unlocked: Map<number, CryptoKey>) => {
+      keys.current = unlocked;
+      setVault({ status: "loading", loaded: 0 });
+      await pull();
+      setVault({ status: "ready" });
+      connectLive();
+    },
+    [pull, connectLive],
+  );
+
+  const deviceId = useRef<string | null>(null);
+
+  const openWithBrowser = useCallback(async () => {
+    if (!me) return;
+    setVaultError(null);
+    setVault({ status: "connecting" });
+    try {
+      if (!(await api.browserVault()).exists) return setVault({ status: "empty" });
+      const device = await ensureDevice(me.userId);
+      deviceId.current = device.deviceId;
+      const result = await fetchVaultKeys(device);
+      if (result.state === "approved") return await load(result.keys);
+      if (result.state === "revoked") {
+        // Revoked on the Devices page: start over with a fresh key and a new approval.
+        return await openWithBrowser();
+      }
+      setVault({ status: "approval", safetyCode: await deviceSafetyCode(device) });
+    } catch (e) {
+      keys.current = new Map();
+      setVault({ status: "locked" });
+      setVaultError(
+        e instanceof ApiError
+          ? e.message
+          : "This browser cannot keep a device key (private window or blocked site data?). Use the recovery key instead.",
+      );
+    }
+  }, [me, load]);
+
+  // While waiting for approval, check every few seconds.
+  useEffect(() => {
+    if (vault.status !== "approval" || !me) return;
+    let stopped = false;
+    const timer = setInterval(async () => {
+      try {
+        const device = await ensureDevice(me.userId);
+        const result = await fetchVaultKeys(device);
+        if (stopped) return;
+        if (result.state === "approved") {
+          clearInterval(timer);
+          await load(result.keys);
+        } else if (result.state === "revoked") {
+          clearInterval(timer);
+          await openWithBrowser();
+        }
+      } catch {
+        /* keep waiting; transient network errors are fine */
+      }
+    }, 4000);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [vault.status, me, load, openWithBrowser]);
+
+  // Signed in with a locked vault: try this browser's own key once per sign-in.
+  const autoTried = useRef<string | null>(null);
+  useEffect(() => {
+    if (me && vault.status === "locked" && autoTried.current !== me.userId) {
+      autoTried.current = me.userId;
+      void openWithBrowser();
+    }
+    if (me === null) autoTried.current = null;
+  }, [me, vault.status, openWithBrowser]);
+
+  const forgetBrowser = useCallback(async () => {
+    if (!me) return;
+    const device = deviceId.current;
+    lock();
+    try {
+      if (device) await api.revoke(device);
+    } finally {
+      await forgetLocal(me.userId);
+      deviceId.current = null;
+    }
+  }, [me, lock]);
+
   const unlock = useCallback(
     async (text: string) => {
       setVaultError(null);
@@ -164,11 +261,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         for (const k of v.recoveryKeys) {
           unlocked.set(k.keyVersion, await unlockVaultKey(base64ToBytes(k.wrappedKey), recoveryKey, k.keyVersion));
         }
-        keys.current = unlocked;
-        setVault({ status: "loading", loaded: 0 });
-        await pull();
-        setVault({ status: "ready" });
-        connectLive();
+        await load(unlocked);
         return true;
       } catch (e) {
         keys.current = new Map();
@@ -181,7 +274,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         recoveryKey.fill(0);
       }
     },
-    [pull, connectLive],
+    [load],
   );
 
   const signOut = useCallback(async () => {
@@ -210,8 +303,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [vault.status, lock]);
 
   const value = useMemo<Session>(
-    () => ({ me, refreshMe, signOut, vault, vaultError, unlock, lock, store, undecryptable, latestSequence, live }),
-    [me, refreshMe, signOut, vault, vaultError, unlock, lock, store, undecryptable, latestSequence, live],
+    () => ({ me, refreshMe, signOut, vault, vaultError, unlock, openWithBrowser, forgetBrowser, lock, store, undecryptable, latestSequence, live }),
+    [me, refreshMe, signOut, vault, vaultError, unlock, openWithBrowser, forgetBrowser, lock, store, undecryptable, latestSequence, live],
   );
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }
