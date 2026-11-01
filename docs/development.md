@@ -45,6 +45,26 @@ docker compose up -d --build && curl -s http://127.0.0.1:8080/health
 docker compose down       # stops; data stays in the db-data volume
 ```
 
+## Web dashboard (web/)
+
+```bash
+cd web
+npm ci
+npm test                  # vitest: crypto against ../testdata vectors, message merging
+npm run typecheck
+npm run build             # static export to out/
+npm run dev               # http://localhost:3000, /api forwarded to the local stack on :8080
+```
+
+The Compose stack serves the built dashboard at http://127.0.0.1:8081 (`web` service: Caddy with the
+static files, `/api` proxied, so cookies behave as in production). Rebuild after changes:
+`docker compose up -d --build web`. The API image copies `backend/build/install`, so run
+`./gradlew installDist` before rebuilding `api`.
+
+`testdata/sync-vectors-v1.json` is written by the app's `CrossLanguageVectorsTest` (real
+`CloudCrypto`) and must decrypt in `web/test/vectors.test.ts`. Delete the file and rerun the Android
+test to regenerate it. Synthetic content only.
+
 Docker Engine 29 rejects API versions below 1.40, so the test task sets `-Dapi.version=1.44` for
 Testcontainers' Docker client.
 
