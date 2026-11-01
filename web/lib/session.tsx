@@ -10,7 +10,7 @@ type VaultState =
   /** No phone has turned on sync for this account yet, so there is nothing to open. */
   | { status: "empty" }
   /** This browser waits for a phone to approve it; the phone must show the same code. */
-  | { status: "approval"; safetyCode: string }
+  | { status: "approval"; safetyCode: string; noApprovedPhone: boolean }
   | { status: "unlocking" }
   | { status: "loading"; loaded: number }
   | { status: "ready" };
@@ -172,7 +172,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setVaultError(null);
     setVault({ status: "connecting" });
     try {
-      if (!(await api.browserVault()).exists) return setVault({ status: "empty" });
+      const info = await api.browserVault();
+      if (!info.exists) return setVault({ status: "empty" });
       const device = await ensureDevice(me.userId);
       deviceId.current = device.deviceId;
       const result = await fetchVaultKeys(device);
@@ -181,7 +182,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         // Revoked on the Devices page: start over with a fresh key and a new approval.
         return await openWithBrowser();
       }
-      setVault({ status: "approval", safetyCode: await deviceSafetyCode(device) });
+      setVault({ status: "approval", safetyCode: await deviceSafetyCode(device), noApprovedPhone: info.approvedPhones === 0 });
     } catch (e) {
       keys.current = new Map();
       setVault({ status: "locked" });
@@ -208,6 +209,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         } else if (result.state === "revoked") {
           clearInterval(timer);
           await openWithBrowser();
+        } else {
+          // Keep the hint current (e.g. once the phone starts over, it can approve this browser).
+          const info = await api.browserVault();
+          const noApprovedPhone = info.approvedPhones === 0;
+          setVault((v) => (v.status === "approval" && v.noApprovedPhone !== noApprovedPhone ? { ...v, noApprovedPhone } : v));
         }
       } catch {
         /* keep waiting; transient network errors are fine */

@@ -25,7 +25,13 @@ import kotlinx.serialization.Serializable
 
 // ---- API types (docs/sync-design.md) ---------------------------------------------------------
 
-@Serializable data class VaultStatus(val exists: Boolean, val currentVersion: Int?, val deviceTrusted: Boolean)
+@Serializable data class VaultStatus(
+    val exists: Boolean,
+    val currentVersion: Int?,
+    val deviceTrusted: Boolean,
+    /** Approved devices on this account; 0 with an existing vault means only the recovery key or a reset can help. */
+    val approvedDevices: Int = 0,
+)
 @Serializable data class WrappedKey(val keyVersion: Int, val wrappedKey: String)
 @Serializable data class VaultInit(val recoveryKeys: List<WrappedKey>, val selfKeys: List<WrappedKey>)
 @Serializable data class VaultKeys(val currentVersion: Int, val keys: List<WrappedKey>)
@@ -97,8 +103,39 @@ class SyncService(private val db: Db) {
 
     suspend fun status(d: DeviceContext): VaultStatus = db.tx {
         val version = query("SELECT current_version FROM vaults WHERE user_id = ?", d.userId) { it.getInt(1) }.singleOrNull()
-        VaultStatus(version != null, version, d.trusted)
+        VaultStatus(version != null, version, d.trusted, approvedDevices(d.userId))
     }
+
+    /**
+     * Starting over when no approved device is left: the server's encrypted copy (events and wrapped
+     * keys) is deleted and this device creates a new vault, exactly like the first phone. Refused
+     * while any approved device exists, so it cannot be used to take over a working account.
+     */
+    suspend fun reset(d: DeviceContext, body: VaultInit, ip: String) {
+        val recovery = body.recoveryKeys.singleOrNull()?.takeIf { it.keyVersion == 1 }
+        val self = body.selfKeys.singleOrNull()?.takeIf { it.keyVersion == 1 }
+        if (recovery == null || self == null || d.encKey == null || d.signKey == null) {
+            throw ApiException(HttpStatusCode.BadRequest, "invalid_vault", "A new vault needs version-1 recovery and device keys, and registered device keys.")
+        }
+        db.tx {
+            update("LOCK TABLE vaults IN SHARE ROW EXCLUSIVE MODE")
+            if (approvedDevices(d.userId) > 0) {
+                throw ApiException(HttpStatusCode.Conflict, "approved_device_exists", "Another device is still approved. Approve this one from it instead.")
+            }
+            update("DELETE FROM sync_events WHERE user_id = ?", d.userId)
+            update("DELETE FROM vault_keys WHERE user_id = ?", d.userId)
+            update("DELETE FROM vaults WHERE user_id = ?", d.userId)
+            update("INSERT INTO vaults (user_id, current_version) VALUES (?, 1)", d.userId)
+            putKey(d.userId, 1, "recovery", recovery.wrappedKey, d.deviceId)
+            putKey(d.userId, 1, d.deviceId.toString(), self.wrappedKey, d.deviceId)
+            update("UPDATE devices SET vault_trusted_at = now() WHERE id = ?", d.deviceId)
+            audit(d.userId, d.deviceId, "vault_reset", "ok", ip)
+        }
+        notices.tryEmit(d.userId to 0L)
+    }
+
+    private fun java.sql.Connection.approvedDevices(userId: UUID): Int =
+        query("SELECT count(*) FROM devices WHERE user_id = ? AND vault_trusted_at IS NOT NULL AND revoked_at IS NULL", userId) { it.getInt(1) }.single()
 
     suspend fun init(d: DeviceContext, body: VaultInit, ip: String) {
         val recovery = body.recoveryKeys.singleOrNull()?.takeIf { it.keyVersion == 1 }
@@ -253,6 +290,11 @@ fun Route.vaultAndSyncRoutes(auth: AuthService, sync: SyncService) {
         post("/init") {
             val d = sync.device(call)
             sync.init(d, call.receive(), call.request.local.remoteHost)
+            call.respond(HttpStatusCode.Created, sync.status(d.copy(trusted = true)))
+        }
+        post("/reset") {
+            val d = sync.device(call)
+            sync.reset(d, call.receive(), call.request.local.remoteHost)
             call.respond(HttpStatusCode.Created, sync.status(d.copy(trusted = true)))
         }
         get("/keys") {

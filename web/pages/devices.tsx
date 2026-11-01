@@ -99,7 +99,11 @@ export default function Devices() {
                     {!d.revokedAt &&
                       (confirming === d.id ? (
                         <div className="flex items-center gap-2">
-                          <span className="text-sm">Revoke this phone?</span>
+                          <span className="text-sm">
+                            {d.platform !== "web" && d.vaultTrusted && devices.filter((x) => x.platform !== "web" && x.vaultTrusted && !x.revokedAt).length === 1
+                              ? "This is your only approved phone. Afterwards nothing can approve new browsers or phones until a phone starts over. Revoke anyway?"
+                              : "Revoke this device?"}
+                          </span>
                           <Button variant="destructive" size="sm" onClick={() => void revoke(d.id)}>
                             Revoke
                           </Button>

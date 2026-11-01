@@ -12,7 +12,7 @@ import org.json.JSONObject
 class CloudHttpException(val status: Int, val code: String, message: String) : IOException(message)
 
 data class WrappedKeyDto(val keyVersion: Int, val wrappedKey: ByteArray)
-data class VaultStatusDto(val exists: Boolean, val currentVersion: Int?, val trusted: Boolean)
+data class VaultStatusDto(val exists: Boolean, val currentVersion: Int?, val trusted: Boolean, val approvedDevices: Int)
 data class PendingDeviceDto(val id: String, val name: String, val encPublic: ByteArray, val signPublic: ByteArray)
 data class UploadEventDto(val eventId: String, val deviceSequence: Long, val keyVersion: Int, val ciphertext: ByteArray, val signature: ByteArray)
 
@@ -32,11 +32,19 @@ class CloudApi(baseUrl: String, private val token: String? = null) {
         ).getString("deviceToken")
 
     fun vaultStatus(): VaultStatusDto = call("GET", "/api/v1/vault").let {
-        VaultStatusDto(it.getBoolean("exists"), if (it.isNull("currentVersion")) null else it.getInt("currentVersion"), it.getBoolean("deviceTrusted"))
+        VaultStatusDto(
+            it.getBoolean("exists"), if (it.isNull("currentVersion")) null else it.getInt("currentVersion"), it.getBoolean("deviceTrusted"),
+            it.optInt("approvedDevices", -1),
+        )
     }
 
     fun vaultInit(recovery: WrappedKeyDto, self: WrappedKeyDto) {
         call("POST", "/api/v1/vault/init", JSONObject().put("recoveryKeys", keys(listOf(recovery))).put("selfKeys", keys(listOf(self))))
+    }
+
+    /** Replaces the server's encrypted copy with a new vault; the server allows it only when no device is approved. */
+    fun vaultReset(recovery: WrappedKeyDto, self: WrappedKeyDto) {
+        call("POST", "/api/v1/vault/reset", JSONObject().put("recoveryKeys", keys(listOf(recovery))).put("selfKeys", keys(listOf(self))))
     }
 
     fun myKeys(): List<WrappedKeyDto> = parseKeys(call("GET", "/api/v1/vault/keys"))

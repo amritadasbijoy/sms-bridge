@@ -79,8 +79,17 @@ class SyncViewModel @Inject constructor(
     private val _approvals = MutableStateFlow<List<PendingApproval>>(emptyList())
     val approvals: StateFlow<List<PendingApproval>> = _approvals.asStateFlow()
 
+    private val _wasRevoked = MutableStateFlow(false)
+    val wasRevoked: StateFlow<Boolean> = _wasRevoked.asStateFlow()
+    private val _lastServer = MutableStateFlow("")
+    val lastServer: StateFlow<String> = _lastServer.asStateFlow()
+
     init {
-        viewModelScope.launch { cloud.refresh() }
+        viewModelScope.launch {
+            cloud.refresh()
+            _wasRevoked.value = cloud.wasRevoked()
+            _lastServer.value = cloud.lastServer().orEmpty()
+        }
     }
 
     private fun run(block: suspend () -> Unit) {
@@ -107,9 +116,13 @@ class SyncViewModel @Inject constructor(
         }
     }
 
-    fun connect(server: String, code: String) = run { cloud.connect(server, code) }
+    fun connect(server: String, code: String) = run {
+        cloud.connect(server, code)
+        _wasRevoked.value = false
+    }
     fun confirmRecoverySaved() = run { cloud.confirmRecoverySaved() }
     fun checkApproval() = run { cloud.checkApproval() }
+    fun startOver() = run { cloud.startOver() }
     fun recover(text: String) = run { cloud.recover(text) }
     fun loadApprovals() = run { _approvals.value = cloud.pendingApprovals() }
     fun approve(request: PendingApproval) = run {
@@ -143,7 +156,11 @@ fun SyncScreen(viewModel: SyncViewModel = hiltViewModel()) {
         }
         error?.let { item { Text(it, color = MaterialTheme.colorScheme.error) } }
         when (val s = state) {
-            CloudState.NotConnected -> item { ConnectCard(busy, viewModel::connect) }
+            CloudState.NotConnected -> item {
+                val revoked by viewModel.wasRevoked.collectAsStateWithLifecycle()
+                val lastServer by viewModel.lastServer.collectAsStateWithLifecycle()
+                ConnectCard(busy, revoked, lastServer, viewModel::connect)
+            }
             is CloudState.NeedsRecoverySetup -> item { RecoveryKeyCard(s.recoveryKey, busy, viewModel::confirmRecoverySaved) }
             is CloudState.WaitingForApproval -> item { WaitingCard(s, busy, viewModel) }
             is CloudState.Ready -> {
@@ -155,10 +172,19 @@ fun SyncScreen(viewModel: SyncViewModel = hiltViewModel()) {
 }
 
 @Composable
-private fun ConnectCard(busy: Boolean, onConnect: (String, String) -> Unit) {
-    var server by rememberSaveable { mutableStateOf("") }
+private fun ConnectCard(busy: Boolean, wasRevoked: Boolean, lastServer: String, onConnect: (String, String) -> Unit) {
+    var server by rememberSaveable(lastServer) { mutableStateOf(lastServer) }
     var code by rememberSaveable { mutableStateOf("") }
     SectionCard("Connect to your server") {
+        if (wasRevoked) {
+            Text(
+                "This phone was removed from the server (revoked on the Devices page), so it stopped syncing. " +
+                    "Create a new pairing code on the Devices page to connect it again.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
         Text(
             "Sign in to your server in a browser, create a pairing code (valid 10 minutes), then enter it here. " +
                 "No password is typed on the phone.",
@@ -215,7 +241,34 @@ private fun RecoveryKeyCard(recoveryKey: String, busy: Boolean, onConfirm: () ->
 @Composable
 private fun WaitingCard(state: CloudState.WaitingForApproval, busy: Boolean, viewModel: SyncViewModel) {
     var recovery by rememberSaveable { mutableStateOf("") }
+    var confirmStartOver by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(Unit) { viewModel.checkApproval() }
+    if (state.canStartOver) {
+        SectionCard("No approved device is left") {
+            Text(
+                "Nothing on this account can approve this phone any more (the approved devices were disconnected or revoked). " +
+                    "Start over to make this phone the approved one again.",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+            Button(onClick = { confirmStartOver = true }, enabled = !busy, modifier = Modifier.padding(top = 8.dp)) { Text("Start over with this phone") }
+        }
+    }
+    if (confirmStartOver) {
+        AlertDialog(
+            onDismissRequest = { confirmStartOver = false },
+            title = { Text("Start over with this phone?") },
+            text = {
+                Text(
+                    "The server's encrypted copy of your messages is deleted and replaced with this phone's messages, which are " +
+                        "uploaded again. Messages on this phone are not touched. You get a new recovery key, and browsers and " +
+                        "other phones must be approved again.",
+                )
+            },
+            confirmButton = { TextButton(onClick = { confirmStartOver = false; viewModel.startOver() }) { Text("Start over") } },
+            dismissButton = { TextButton(onClick = { confirmStartOver = false }) { Text("Cancel") } },
+        )
+    }
     SectionCard("Waiting for approval") {
         Text(
             "This account already syncs from another phone. On that phone, open Sync → Devices waiting for approval, " +
@@ -268,7 +321,13 @@ private fun ConnectedCard(state: CloudState.Ready, viewModel: SyncViewModel) {
         AlertDialog(
             onDismissRequest = { confirmDisconnect = false },
             title = { Text("Disconnect this phone?") },
-            text = { Text("This phone forgets the server and its keys. Your messages on this phone and on the server are not deleted.") },
+            text = {
+                Text(
+                    "This phone forgets the server and its keys. Your messages on this phone and on the server are not deleted.\n\n" +
+                        "If this is your only approved phone, nothing can approve it again afterwards: you would need the " +
+                        "recovery key, or to start over (the server copy is replaced with this phone's messages).",
+                )
+            },
             confirmButton = { TextButton(onClick = { confirmDisconnect = false; viewModel.disconnect() }) { Text("Disconnect") } },
             dismissButton = { TextButton(onClick = { confirmDisconnect = false }) { Text("Cancel") } },
         )

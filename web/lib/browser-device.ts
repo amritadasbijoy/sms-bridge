@@ -57,8 +57,21 @@ async function signingPublicKey(): Promise<string> {
   }
 }
 
-/** The stored device for this account, registering a new one with the server if needed. */
-export async function ensureDevice(userId: string): Promise<DeviceRecord> {
+const inFlight = new Map<string, Promise<DeviceRecord>>();
+
+/**
+ * The stored device for this account, registering a new one with the server if needed. Concurrent
+ * callers share one registration, so a browser never registers twice at once.
+ */
+export function ensureDevice(userId: string): Promise<DeviceRecord> {
+  const running = inFlight.get(userId);
+  if (running) return running;
+  const p = createOrLoad(userId).finally(() => inFlight.delete(userId));
+  inFlight.set(userId, p);
+  return p;
+}
+
+async function createOrLoad(userId: string): Promise<DeviceRecord> {
   const existing = await load(userId);
   if (existing) return existing;
   const encKeys = (await crypto.subtle.generateKey({ name: "X25519" }, false, ["deriveBits"])) as CryptoKeyPair;

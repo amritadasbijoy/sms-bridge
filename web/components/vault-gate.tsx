@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input, Label } from "@/components/ui/input";
 import { useSession } from "@/lib/session";
 
+
 /** Shows its children only once the vault is unlocked in this tab; otherwise how to open it. */
 export function VaultGate({ children }: { children: ReactNode }) {
   const { vault } = useSession();
@@ -49,6 +50,17 @@ export function UnlockCard() {
               <p className="text-xs text-muted-foreground">This browser&apos;s safety code</p>
               <p className="font-mono text-3xl tracking-widest">{vault.safetyCode}</p>
             </div>
+            {vault.noApprovedPhone && (
+              <Alert tone="warning">
+                <p className="font-medium">No phone is approved on this account right now, so nothing can approve this browser yet.</p>
+                <p className="mt-1">
+                  On your phone open SMS Bridge → Sync. If it is not connected, create a pairing code on the{" "}
+                  <a className="underline" href="/devices/">Devices</a> page and connect it. If it says{" "}
+                  <span className="font-medium">No approved device is left</span>, tap{" "}
+                  <span className="font-medium">Start over with this phone</span>. Then approve this browser as below.
+                </p>
+              </Alert>
+            )}
             <ol className="list-decimal space-y-1 pl-5 text-sm">
               <li>On your phone open SMS Bridge → <span className="font-medium">Sync</span>.</li>
               <li>
