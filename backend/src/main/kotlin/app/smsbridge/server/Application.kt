@@ -388,6 +388,9 @@ class DeviceService(private val db: Db) {
                         """.trimIndent(),
                         name, request.publicKey, request.encPublicKey, request.signPublicKey, request.encPublicKey, deviceId,
                     )
+                    // Keys wrapped for the old public key are useless to the phone now; drop them so it
+                    // waits for a fresh approval or recovery instead of fetching undecryptable blobs.
+                    if (request.encPublicKey != null) update("DELETE FROM vault_keys WHERE user_id = ? AND recipient = ?", userId, deviceId.toString())
                 }
             }
             update("INSERT INTO device_tokens (token_hash, device_id) VALUES (?, ?)", Secrets.sha256(token), deviceId)

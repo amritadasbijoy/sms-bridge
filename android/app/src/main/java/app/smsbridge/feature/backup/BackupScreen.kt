@@ -43,6 +43,8 @@ import androidx.work.WorkInfo
 import app.smsbridge.core.database.entity.BackupHistoryEntity
 import app.smsbridge.data.background.SmsCaptureCoordinator
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.ImeAction
@@ -560,10 +562,21 @@ private fun RestorePlanner(
 
             Text("Messages", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 12.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(checked = incoming, onCheckedChange = { incoming = it })
-                Text("Received")
-                Checkbox(checked = outgoing, onCheckedChange = { outgoing = it })
-                Text("Sent")
+                // Label and box toggle together.
+                Row(
+                    Modifier.toggleable(value = incoming, role = Role.Checkbox, onValueChange = { incoming = it }).padding(end = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Checkbox(checked = incoming, onCheckedChange = null)
+                    Text("Received", modifier = Modifier.padding(start = 4.dp))
+                }
+                Row(
+                    Modifier.toggleable(value = outgoing, role = Role.Checkbox, onValueChange = { outgoing = it }),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Checkbox(checked = outgoing, onCheckedChange = null)
+                    Text("Sent", modifier = Modifier.padding(start = 4.dp))
+                }
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(

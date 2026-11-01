@@ -4,7 +4,7 @@ A privacy-first SMS manager for Android: a local, on-device archive of your text
 with backup/restore, device-to-device transfer and optional end-to-end-encrypted sync to a
 server you host yourself.
 
-**Status: Phases 1–5 done; Phase 6 (encrypted sync) next.** See [docs/PROGRESS.md](docs/PROGRESS.md).
+**Status: Phases 1–6 done; Phase 7 (web dashboard) next.** See [docs/PROGRESS.md](docs/PROGRESS.md).
 
 What works today:
 
@@ -17,7 +17,7 @@ What works today:
   checksums, JSON/CSV export, validated selective restore into the archive or the phone. Files
   from other SMS backup tools are readable.
 - **Phone-to-phone transfer** over your own Wi-Fi: QR pairing, pinned TLS, resumable.
-- **Self-hosted server** (not yet connected to the app): accounts, sessions, device pairing and
+- **Self-hosted server + end-to-end encrypted sync:** accounts, device pairing and approval with safety codes, recovery key, signed encrypted uploads (the server cannot read messages);
   revocation, Docker Compose stack with an HTTPS proxy and encrypted database backups.
 
 ## Repository layout

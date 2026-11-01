@@ -121,7 +121,15 @@ class CloudRepository @Inject constructor(
         val deviceId = devices.localDeviceId()
         val wrapped = api().myKeys()
         if (wrapped.isEmpty()) return@io refresh()
-        storeVaultKeys(wrapped.associate { it.keyVersion to CloudCrypto.unwrapForDevice(it.wrappedKey, keys, deviceId, it.keyVersion) })
+        val unwrapped = try {
+            wrapped.associate { it.keyVersion to CloudCrypto.unwrapForDevice(it.wrappedKey, keys, deviceId, it.keyVersion) }
+        } catch (e: java.security.GeneralSecurityException) {
+            // Not wrapped for this phone's current key (e.g. left over from before a re-pairing):
+            // still waiting for a real approval.
+            AppLog.w(TAG, "vault keys on the server are not for this phone's current key", e)
+            return@io refresh()
+        }
+        storeVaultKeys(unwrapped)
         becomeTrusted()
     }
 

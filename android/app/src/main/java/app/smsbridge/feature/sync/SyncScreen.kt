@@ -10,7 +10,9 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.semantics.Role
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -93,6 +95,12 @@ class SyncViewModel @Inject constructor(
                 _error.value = e.message
             } catch (e: IOException) {
                 _error.value = "Could not reach the server. Check the address and your connection."
+            } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Never crash the screen; report the class only (messages may come from crypto libraries).
+                app.smsbridge.core.common.AppLog.w("Sync", "sync action failed", e)
+                _error.value = "Something went wrong (${e.javaClass.simpleName}). Try again."
             } finally {
                 _busy.value = false
             }
@@ -192,8 +200,12 @@ private fun RecoveryKeyCard(recoveryKey: String, busy: Boolean, onConfirm: () ->
             modifier = Modifier.padding(top = 4.dp),
         )
         Text(recoveryKey, style = MaterialTheme.typography.headlineSmall, fontFamily = FontFamily.Monospace, modifier = Modifier.padding(vertical = 12.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(checked = saved, onCheckedChange = { saved = it })
+        // The whole row toggles (not just the small box), as accessibility guidelines require.
+        Row(
+            Modifier.fillMaxWidth().toggleable(value = saved, role = Role.Checkbox, onValueChange = { saved = it }),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Checkbox(checked = saved, onCheckedChange = null)
             Text("I have written down the recovery key")
         }
         Button(onClick = onConfirm, enabled = saved && !busy) { Text(if (busy) "Setting up…" else "Continue") }

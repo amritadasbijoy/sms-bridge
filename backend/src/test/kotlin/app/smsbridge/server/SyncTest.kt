@@ -158,6 +158,25 @@ class SyncTest {
     }
 
     @Test
+    fun rePairingWithNewKeysDropsStaleWrappedKeys() = api { browser ->
+        // Found on the emulator: a phone that disconnects and pairs again gets new keys; it must not
+        // be handed the copy wrapped for its old key (it cannot decrypt it).
+        val a = Phone("A"); val b = Phone("B")
+        browser.pair(a); browser.initVault(a); browser.pair(b)
+        browser.asPhone(a, "/api/v1/vault/requests/${b.id}/approve", """{"keys":[{"keyVersion":1,"wrappedKey":"$wrapped"}]}""")
+        assertEquals(1, obj(browser.asPhone(b, "/api/v1/vault/keys"))["keys"]!!.jsonArray.size)
+
+        val b2 = object { val encPublic = b64.encodeToString(ByteArray(32).also(SecureRandom()::nextBytes)) }
+        val code = obj(browser.post("/api/v1/devices/pairing-codes") { json("{}") })["code"]!!.jsonPrimitive.content
+        val reg = browser.post("/api/v1/devices/register") {
+            json("""{"pairingCode":"$code","deviceId":"${b.id}","name":"B","platform":"android","encPublicKey":"${b2.encPublic}","signPublicKey":"${b.signPublic}"}""")
+        }
+        b.token = obj(reg)["deviceToken"]!!.jsonPrimitive.content
+        assertEquals(0, obj(browser.asPhone(b, "/api/v1/vault/keys"))["keys"]!!.jsonArray.size)
+        assertFalse(obj(browser.asPhone(b, "/api/v1/vault"))["deviceTrusted"]!!.jsonPrimitive.content.toBoolean())
+    }
+
+    @Test
     fun recoveryKeyPath() = api { browser ->
         val a = Phone("A"); val c = Phone("C")
         browser.pair(a); browser.initVault(a); browser.pair(c)
