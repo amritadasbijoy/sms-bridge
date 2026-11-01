@@ -54,6 +54,7 @@ interface ReceiverEntryPoint {
     fun captureCoordinator(): SmsCaptureCoordinator
     fun messageNotifier(): MessageNotifier
     fun smsSender(): SmsSender
+    fun instantUploader(): app.smsbridge.data.sync.InstantUploader
 
     @ApplicationScope
     fun applicationScope(): CoroutineScope

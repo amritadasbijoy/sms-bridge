@@ -131,6 +131,13 @@ class SyncViewModel @Inject constructor(
     }
     fun disconnect() = run { cloud.disconnect() }
     fun syncNow() = scheduler.scheduleSync()
+    private val _history = MutableStateFlow<app.smsbridge.data.cloud.HistoryStatus?>(null)
+    val history: StateFlow<app.smsbridge.data.cloud.HistoryStatus?> = _history.asStateFlow()
+    fun loadHistory() = viewModelScope.launch { _history.value = cloud.historyStatus() }
+    fun uploadFullHistory() = run {
+        cloud.uploadFullHistory()
+        _history.value = cloud.historyStatus()
+    }
     fun setPaused(paused: Boolean) {
         viewModelScope.launch {
             settings.setSyncPaused(paused)
@@ -308,6 +315,7 @@ private fun ConnectedCard(state: CloudState.Ready, viewModel: SyncViewModel) {
         Text(if (pending > 0) "$pending changes waiting to upload." else "Everything is uploaded.", style = MaterialTheme.typography.bodyMedium)
         lastSynced?.let { Text("Last upload ${formatTimestamp(it)}", style = MaterialTheme.typography.bodySmall) }
         Text("This phone's safety code: ${state.safetyCode}", style = MaterialTheme.typography.bodySmall)
+        HistoryRow(viewModel)
         Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Pause sync")
             Switch(checked = paused, onCheckedChange = viewModel::setPaused)
@@ -330,6 +338,36 @@ private fun ConnectedCard(state: CloudState.Ready, viewModel: SyncViewModel) {
             },
             confirmButton = { TextButton(onClick = { confirmDisconnect = false; viewModel.disconnect() }) { Text("Disconnect") } },
             dismissButton = { TextButton(onClick = { confirmDisconnect = false }) { Text("Cancel") } },
+        )
+    }
+}
+
+@Composable
+private fun HistoryRow(viewModel: SyncViewModel) {
+    val history by viewModel.history.collectAsStateWithLifecycle()
+    var confirm by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(Unit) { viewModel.loadHistory() }
+    val h = history ?: return
+    when {
+        h.fullHistoryQueued || h.uploadedFrom == null ->
+            Text("Uploading new messages instantly, plus your full history.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
+        else -> {
+            Text(
+                "New messages upload instantly. Messages since ${formatTimestamp(h.uploadedFrom)} are on the server; " +
+                    "older ones stay only on this phone.",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+            TextButton(onClick = { confirm = true }) { Text("Upload full history…") }
+        }
+    }
+    if (confirm) {
+        AlertDialog(
+            onDismissRequest = { confirm = false },
+            title = { Text("Upload your full history?") },
+            text = { Text("Every older message in this phone's archive is encrypted and uploaded. New messages keep going first. This can take a while for large archives.") },
+            confirmButton = { TextButton(onClick = { confirm = false; viewModel.uploadFullHistory() }) { Text("Upload") } },
+            dismissButton = { TextButton(onClick = { confirm = false }) { Text("Cancel") } },
         )
     }
 }

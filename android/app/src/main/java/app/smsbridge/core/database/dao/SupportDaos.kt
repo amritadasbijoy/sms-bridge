@@ -17,8 +17,17 @@ interface SyncOperationDao {
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(operation: SyncOperationEntity)
 
-    @Query("SELECT * FROM sync_operations WHERE state IN ('PENDING', 'FAILED') ORDER BY device_sequence LIMIT :limit")
+    /** Live events (received, sent, status) before the bulk history import, each in order. */
+    @Query(
+        """
+        SELECT * FROM sync_operations WHERE state IN ('PENDING', 'FAILED')
+        ORDER BY CASE WHEN event_type = 'SMS_IMPORTED' THEN 1 ELSE 0 END, device_sequence LIMIT :limit
+        """,
+    )
     suspend fun nextBatch(limit: Int): List<SyncOperationEntity>
+
+    @Query("SELECT * FROM sync_operations WHERE message_id IN (:messageIds) AND state IN ('PENDING', 'FAILED') ORDER BY device_sequence")
+    suspend fun pendingForMessages(messageIds: List<String>): List<SyncOperationEntity>
 
     @Query(
         """

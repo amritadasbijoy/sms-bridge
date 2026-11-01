@@ -16,8 +16,9 @@ import kotlinx.coroutines.withTimeout
  * When SMS Bridge is the default SMS app the same message also arrives as `SMS_DELIVER` at
  * [SmsDeliverReceiver], which owns it (provider write + notification), so this receiver steps aside.
  *
- * onReceive only parses the PDUs, then uses goAsync() for a short, bounded database write and
- * schedules WorkManager jobs. No network access happens here.
+ * onReceive only parses the PDUs, then uses goAsync() for a short, bounded database write and an
+ * immediate upload of the new message (sync is the point of the app: incoming SMS must reach the
+ * server at once). If the upload cannot finish in time, WorkManager retries it.
  */
 class SmsReceiver : BroadcastReceiver() {
 
@@ -31,10 +32,11 @@ class SmsReceiver : BroadcastReceiver() {
 
         entryPoint.applicationScope().launch {
             try {
-                withTimeout(CAPTURE_TIMEOUT_MS) {
-                    messages.forEach { entryPoint.smsRepository().captureIncoming(it) }
+                val ids = withTimeout(CAPTURE_TIMEOUT_MS) {
+                    messages.map { entryPoint.smsRepository().captureIncoming(it) }
                 }
                 AppLog.i(TAG, "captured ${messages.size} incoming message(s)")
+                uploadNow(entryPoint, ids)
             } catch (e: Exception) {
                 // The default SMS app still writes the message to the provider; the
                 // reconciliation scheduled below will archive it from there.
@@ -51,8 +53,8 @@ class SmsReceiver : BroadcastReceiver() {
     private companion object {
         const val TAG = "SmsReceiver"
 
-        /** Well under the ~10 s budget Android gives a goAsync() receiver. */
-        const val CAPTURE_TIMEOUT_MS = 8_000L
+        /** Capture plus upload stay well under the ~10 s budget Android gives a goAsync() receiver. */
+        const val CAPTURE_TIMEOUT_MS = 2_000L
 
         /** Gives the default SMS app time to write its provider row before we link to it. */
         const val RECONCILE_DELAY_MS = 30_000L
@@ -73,13 +75,13 @@ class SmsDeliverReceiver : BroadcastReceiver() {
 
         entryPoint.applicationScope().launch {
             try {
-                withTimeout(8_000L) {
-                    messages.forEach { sms ->
-                        val messageId = entryPoint.smsRepository().recordDelivered(sms)
-                        entryPoint.messageNotifier().notifyIncoming(messageId, sms)
+                val ids = withTimeout(2_000L) {
+                    messages.map { sms ->
+                        entryPoint.smsRepository().recordDelivered(sms).also { entryPoint.messageNotifier().notifyIncoming(it, sms) }
                     }
                 }
                 AppLog.i(TAG, "delivered ${messages.size} message(s)")
+                uploadNow(entryPoint, ids)
             } catch (e: Exception) {
                 AppLog.e(TAG, "failed to store delivered message", e)
             } finally {
@@ -155,3 +157,13 @@ object IncomingSmsAssembler {
                 )
             }
 }
+
+/** Upload just-received messages now, within the receiver's time budget; the worker is the fallback. */
+internal suspend fun uploadNow(entryPoint: ReceiverEntryPoint, messageIds: List<String>) {
+    val ok = kotlinx.coroutines.withTimeoutOrNull(INSTANT_UPLOAD_TIMEOUT_MS) {
+        runCatching { entryPoint.instantUploader().uploadNow(messageIds) }.getOrDefault(false)
+    }
+    if (ok != true) AppLog.i("SmsReceiver", "instant upload did not complete; queued for retry")
+}
+
+private const val INSTANT_UPLOAD_TIMEOUT_MS = 6_500L

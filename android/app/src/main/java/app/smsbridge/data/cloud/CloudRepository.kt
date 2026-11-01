@@ -41,6 +41,8 @@ sealed interface CloudState {
     data class Ready(val server: String, val safetyCode: String) : CloudState
 }
 
+data class HistoryStatus(val uploadedFrom: Long?, val fullHistoryQueued: Boolean)
+
 data class PendingApproval(val deviceId: String, val name: String, val safetyCode: String, internal val encPublic: ByteArray)
 
 /**
@@ -236,22 +238,43 @@ class CloudRepository @Inject constructor(
     private suspend fun becomeTrusted(): CloudState {
         settings.putString(K_TRUSTED, "true")
         if (settings.getString(K_SNAPSHOT_DONE) == null) {
-            val queued = enqueueSnapshot()
+            // Recent messages only by default; older history is uploaded on request (uploadFullHistory).
+            val since = time.nowMillis() - INITIAL_SYNC_WINDOW_MS
+            settings.putString(K_HISTORY_FROM, since.toString())
+            val queued = enqueueSnapshot(since, before = false)
             settings.putString(K_SNAPSHOT_DONE, "true")
-            AppLog.i(TAG, "queued initial snapshot of $queued messages")
+            AppLog.i(TAG, "queued initial snapshot of $queued recent messages")
         }
         scheduler.scheduleSync()
         return refresh()
     }
 
-    /** Queues one SMS_IMPORTED event per archived message (the initial upload), in pages. */
-    private suspend fun enqueueSnapshot(): Int {
+    /** Whether messages older than the first upload's window are on the server too. */
+    suspend fun historyStatus(): HistoryStatus = io {
+        val from = settings.getString(K_HISTORY_FROM)?.toLongOrNull()
+        HistoryStatus(uploadedFrom = from, fullHistoryQueued = settings.getString(K_FULL_HISTORY) == "true")
+    }
+
+    /** Queues every archived message older than the first upload's window. */
+    suspend fun uploadFullHistory(): Int = io {
+        if (refresh() !is CloudState.Ready) return@io 0
+        val from = settings.getString(K_HISTORY_FROM)?.toLongOrNull() ?: return@io 0
+        if (settings.getString(K_FULL_HISTORY) == "true") return@io 0
+        val queued = enqueueSnapshot(from, before = true)
+        settings.putString(K_FULL_HISTORY, "true")
+        AppLog.i(TAG, "queued $queued older messages")
+        scheduler.scheduleSync()
+        queued
+    }
+
+    /** Queues one SMS_IMPORTED event per archived message dated from [since] (or before it), in pages. */
+    private suspend fun enqueueSnapshot(since: Long, before: Boolean): Int {
         val dao = db.smsMessageDao()
         val max = dao.maxRowId() ?: return 0
         var after = 0L
         var total = 0
         while (true) {
-            val ids = dao.idPage(after, max, 500)
+            val ids = dao.idPageByDate(after, max, since, before, 500)
             if (ids.isEmpty()) break
             db.withTransaction {
                 val now = time.nowMillis()
@@ -301,6 +324,11 @@ class CloudRepository @Inject constructor(
         const val K_SNAPSHOT_DONE = "cloud.snapshot_done"
         const val K_PENDING_RECOVERY = "cloud.pending_recovery"
         const val K_RESET = "cloud.reset_pending"
+        const val K_HISTORY_FROM = "cloud.history_from"
+        const val K_FULL_HISTORY = "cloud.full_history"
+
+        /** The first upload covers the last 4 days; the rest of the archive only on request. */
+        const val INITIAL_SYNC_WINDOW_MS = 4L * 24 * 60 * 60 * 1000
         // Outside PREFIX on purpose: they survive a disconnect.
         const val K_REVOKED_NOTICE = "cloudnotice.revoked"
         const val K_LAST_SERVER = "cloudnotice.last_server"

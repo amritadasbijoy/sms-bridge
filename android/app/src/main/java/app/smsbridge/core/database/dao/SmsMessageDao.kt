@@ -123,6 +123,16 @@ interface SmsMessageDao {
     @Query("SELECT id FROM sms_messages WHERE rowid > :afterRowId AND rowid <= :maxRowId ORDER BY rowid LIMIT :limit")
     suspend fun idPage(afterRowId: Long, maxRowId: Long, limit: Int): List<String>
 
+    /** Like [idPage], limited to messages dated at or after [since] (or before it, with [before] = true). */
+    @Query(
+        """
+        SELECT id FROM sms_messages WHERE rowid > :afterRowId AND rowid <= :maxRowId
+          AND ((:before = 0 AND date >= :since) OR (:before = 1 AND date < :since))
+        ORDER BY rowid LIMIT :limit
+        """,
+    )
+    suspend fun idPageByDate(afterRowId: Long, maxRowId: Long, since: Long, before: Boolean, limit: Int): List<String>
+
     @Query("SELECT rowid FROM sms_messages WHERE id = :id")
     suspend fun rowIdOf(id: String): Long?
 
