@@ -36,7 +36,8 @@ sealed interface CloudState {
     /** Vault created locally; the user must write down the recovery key before it is uploaded. */
     data class NeedsRecoverySetup(val server: String, val recoveryKey: String) : CloudState
     /** Registered, but no vault key yet: approve from a trusted device, or enter the recovery key. */
-    data class WaitingForApproval(val server: String, val safetyCode: String) : CloudState
+    /** [canStartOver]: no approved device is left on the account, so nobody can approve this phone. */
+    data class WaitingForApproval(val server: String, val safetyCode: String, val canStartOver: Boolean = false) : CloudState
     data class Ready(val server: String, val safetyCode: String) : CloudState
 }
 
@@ -66,7 +67,9 @@ class CloudRepository @Inject constructor(
             settings.getString(K_PENDING_RECOVERY) != null ->
                 CloudState.NeedsRecoverySetup(server, CloudCrypto.formatRecoveryKey(secret(K_PENDING_RECOVERY)!!))
             settings.getString(K_TRUSTED) == "true" -> CloudState.Ready(server, CloudCrypto.safetyCode(keys.encPublic, keys.signPublic))
-            else -> CloudState.WaitingForApproval(server, CloudCrypto.safetyCode(keys.encPublic, keys.signPublic))
+            else -> CloudState.WaitingForApproval(
+                server, CloudCrypto.safetyCode(keys.encPublic, keys.signPublic), settings.getString(K_CAN_START_OVER) == "true",
+            )
         }
         _state.value = next
         next
@@ -82,7 +85,9 @@ class CloudRepository @Inject constructor(
         val name = devices.localDevice.first()?.name ?: "Android device"
         val token = CloudApi(server).register(pairingCode, deviceId, name, keys.encPublic, keys.signPublic)
         settings.deletePrefix(PREFIX)
+        settings.deletePrefix(K_REVOKED_NOTICE)
         settings.putString(K_SERVER, server)
+        settings.putString(K_LAST_SERVER, server)
         putSecret(K_TOKEN, token.toByteArray())
         putSecret(K_ENC_PRIVATE, keys.encPrivate)
         putSecret(K_SIGN_PRIVATE, keys.signPrivate)
@@ -96,6 +101,7 @@ class CloudRepository @Inject constructor(
             settings.putString(K_VK_CURRENT, "1")
             putSecret(K_PENDING_RECOVERY, CloudCrypto.newRecoveryKey())
         }
+        rememberCanStartOver(status)
         AppLog.i(TAG, "registered with server; vault exists=${status.exists}")
         refresh()
     }
@@ -106,12 +112,12 @@ class CloudRepository @Inject constructor(
         val keys = loadDeviceKeys()!!
         val deviceId = devices.localDeviceId()
         val vk = secret(vkKey(1))!!
-        api().vaultInit(
-            recovery = WrappedKeyDto(1, CloudCrypto.wrapForRecovery(vk, recovery, 1)),
-            self = WrappedKeyDto(1, CloudCrypto.wrapForDevice(vk, keys.encPublic, deviceId, 1)),
-        )
+        val wrappedRecovery = WrappedKeyDto(1, CloudCrypto.wrapForRecovery(vk, recovery, 1))
+        val wrappedSelf = WrappedKeyDto(1, CloudCrypto.wrapForDevice(vk, keys.encPublic, deviceId, 1))
+        if (settings.getString(K_RESET) == "true") api().vaultReset(wrappedRecovery, wrappedSelf) else api().vaultInit(wrappedRecovery, wrappedSelf)
         recovery.fill(0)
         settings.deletePrefix(K_PENDING_RECOVERY)
+        settings.deletePrefix(K_RESET)
         becomeTrusted()
     }
 
@@ -119,8 +125,16 @@ class CloudRepository @Inject constructor(
     suspend fun checkApproval(): CloudState = io {
         val keys = loadDeviceKeys() ?: return@io refresh()
         val deviceId = devices.localDeviceId()
-        val wrapped = api().myKeys()
-        if (wrapped.isEmpty()) return@io refresh()
+        val wrapped = try {
+            api().myKeys()
+        } catch (e: CloudHttpException) {
+            if (e.status == 401) return@io handleRevoked()
+            throw e
+        }
+        if (wrapped.isEmpty()) {
+            rememberCanStartOver(api().vaultStatus())
+            return@io refresh()
+        }
         val unwrapped = try {
             wrapped.associate { it.keyVersion to CloudCrypto.unwrapForDevice(it.wrappedKey, keys, deviceId, it.keyVersion) }
         } catch (e: java.security.GeneralSecurityException) {
@@ -161,6 +175,44 @@ class CloudRepository @Inject constructor(
         api().approve(request.deviceId, wrapped)
         AppLog.i(TAG, "approved a new device for the vault")
     }
+
+    /**
+     * No approved device is left, so nobody can approve this phone: start a new vault from this
+     * phone, as if it were the first one. The server deletes its old encrypted copy when the new
+     * recovery key is confirmed; this phone's messages are then uploaded again. Local messages are untouched.
+     */
+    suspend fun startOver(): CloudState = io {
+        putSecret(vkKey(1), CloudCrypto.newVaultKey())
+        settings.putString(K_VK_CURRENT, "1")
+        putSecret(K_PENDING_RECOVERY, CloudCrypto.newRecoveryKey())
+        settings.putString(K_RESET, "true")
+        settings.deletePrefix(K_SNAPSHOT_DONE)
+        settings.deletePrefix(K_CAN_START_OVER)
+        AppLog.i(TAG, "starting over with a new vault")
+        refresh()
+    }
+
+    private suspend fun rememberCanStartOver(status: VaultStatusDto) {
+        if (status.exists && status.approvedDevices == 0 && !status.trusted) settings.putString(K_CAN_START_OVER, "true")
+        else settings.deletePrefix(K_CAN_START_OVER)
+    }
+
+    /**
+     * The server no longer accepts this phone's token (revoked on the Devices page). Drop the
+     * connection so the Sync tab says so instead of showing "connected" while uploads fail.
+     */
+    suspend fun handleRevoked(): CloudState = io {
+        settings.deletePrefix(PREFIX)
+        settings.putString(K_REVOKED_NOTICE, "true")
+        AppLog.i(TAG, "server no longer accepts this phone; disconnected")
+        refresh()
+    }
+
+    /** True once after this phone was found revoked; cleared by the next connect. */
+    suspend fun wasRevoked(): Boolean = settings.getString(K_REVOKED_NOTICE) == "true"
+
+    /** The server address last connected to, to prefill the connect form. */
+    suspend fun lastServer(): String? = settings.getString(K_LAST_SERVER)
 
     /** Forgets the server connection and keys on this phone. The local archive is untouched. */
     suspend fun disconnect(): CloudState = io {
@@ -248,6 +300,11 @@ class CloudRepository @Inject constructor(
         const val K_TRUSTED = "cloud.trusted"
         const val K_SNAPSHOT_DONE = "cloud.snapshot_done"
         const val K_PENDING_RECOVERY = "cloud.pending_recovery"
+        const val K_RESET = "cloud.reset_pending"
+        // Outside PREFIX on purpose: they survive a disconnect.
+        const val K_REVOKED_NOTICE = "cloudnotice.revoked"
+        const val K_LAST_SERVER = "cloudnotice.last_server"
+        const val K_CAN_START_OVER = "cloud.can_start_over"
         fun vkKey(version: Int) = "cloud.vk.$version"
         fun b64(bytes: ByteArray): String = Base64.getEncoder().encodeToString(bytes)
         fun unb64(text: String): ByteArray = Base64.getDecoder().decode(text)
@@ -276,7 +333,10 @@ class HttpSyncTransport @Inject constructor(
             SyncUploadResult.Acknowledged(withContext(Dispatchers.IO) { ctx.api.upload(dtos) })
         } catch (e: CloudHttpException) {
             when (e.status) {
-                401 -> SyncUploadResult.PermanentFailure("unauthorized")
+                401 -> {
+                    cloud.handleRevoked()
+                    SyncUploadResult.PermanentFailure("unauthorized")
+                }
                 403 -> SyncUploadResult.PermanentFailure("not_trusted")
                 400, 409 -> SyncUploadResult.PermanentFailure("rejected_${e.code}")
                 else -> SyncUploadResult.RetryableFailure("http_${e.status}")

@@ -76,7 +76,7 @@ object Totp {
 @Serializable data class TotpSetup(val secret: String, val otpauthUri: String)
 @Serializable data class TotpCode(val code: String)
 @Serializable data class TotpDisable(val password: String, val code: String)
-@Serializable data class BrowserVault(val exists: Boolean, val currentVersion: Int?, val recoveryKeys: List<WrappedKey>)
+@Serializable data class BrowserVault(val exists: Boolean, val currentVersion: Int?, val recoveryKeys: List<WrappedKey>, val approvedPhones: Int = 0)
 
 const val BROWSER_COOKIE = "sb_browser"
 val TRUSTED_BROWSER_LIFETIME: java.time.Duration = java.time.Duration.ofDays(90)
@@ -189,7 +189,11 @@ fun Route.twoFactorRoutes(auth: AuthService, twoFactor: TwoFactorService, db: Db
             val keys = query("SELECT key_version, wrapped_key FROM vault_keys WHERE user_id = ? AND recipient = 'recovery' ORDER BY key_version", user.first) {
                 WrappedKey(it.getInt(1), java.util.Base64.getEncoder().encodeToString(it.getBytes(2)))
             }
-            BrowserVault(version != null, version, keys)
+            val phones = query(
+                "SELECT count(*) FROM devices WHERE user_id = ? AND platform <> 'web' AND vault_trusted_at IS NOT NULL AND revoked_at IS NULL",
+                user.first,
+            ) { it.getInt(1) }.single()
+            BrowserVault(version != null, version, keys, phones)
         }
         call.respond(result)
     }

@@ -94,6 +94,41 @@ class BrowserInviteTest {
         return obj(r)["deviceId"]!!.jsonPrimitive.content
     }
 
+    /** Pairs a phone without creating a vault. Returns (deviceId, token). */
+    private suspend fun HttpClient.newPhone(): Pair<String, String> {
+        val code = obj(postJson("/api/v1/devices/pairing-codes", "{}"))["code"]!!.jsonPrimitive.content
+        val id = UUID.randomUUID().toString()
+        val reg = postJson("/api/v1/devices/register", """{"pairingCode":"$code","deviceId":"$id","name":"Phone 2","platform":"android","encPublicKey":"${key()}","signPublicKey":"${key()}"}""")
+        return id to obj(reg)["deviceToken"]!!.jsonPrimitive.content
+    }
+
+    private val vaultBody get() = """{"recoveryKeys":[{"keyVersion":1,"wrappedKey":"${wrapped()}"}],"selfKeys":[{"keyVersion":1,"wrappedKey":"${wrapped()}"}]}"""
+
+    @Test
+    fun startingOverIsOnlyPossibleWhenNoApprovedDeviceIsLeft() = api { owner ->
+        val first = owner.trustedPhone()
+        val (secondId, second) = owner.newPhone()
+        val status = obj(owner.get("/api/v1/vault") { header(HttpHeaders.Authorization, "Bearer $second") })
+        assertEquals("1", status["approvedDevices"]!!.jsonPrimitive.content)
+        // While the first phone is approved, the second must be approved by it, not reset the vault.
+        assertEquals(HttpStatusCode.Conflict, owner.postJson("/api/v1/vault/reset", vaultBody, bearer = second).status)
+        assertEquals("1", obj(owner.get("/api/v1/vault/browser"))["approvedPhones"]!!.jsonPrimitive.content)
+
+        // The first phone uploads something, then is revoked: nothing approved is left.
+        val firstId = db.tx { query("SELECT id FROM devices WHERE vault_trusted_at IS NOT NULL") { it.uuid("id") }.single() }
+        db.tx { update("INSERT INTO sync_events (event_id, user_id, device_id, device_sequence, event_type, key_version, ciphertext, signature) SELECT gen_random_uuid(), user_id, id, 1, 'opaque', 1, ?, ? FROM devices WHERE id = ?", ByteArray(40), ByteArray(64), firstId) }
+        assertEquals(HttpStatusCode.NoContent, owner.postJson("/api/v1/devices/$firstId/revoke", "{}").status)
+        assertEquals("0", obj(owner.get("/api/v1/vault") { header(HttpHeaders.Authorization, "Bearer $second") })["approvedDevices"]!!.jsonPrimitive.content)
+
+        val reset = owner.postJson("/api/v1/vault/reset", vaultBody, bearer = second)
+        assertEquals(HttpStatusCode.Created, reset.status)
+        assertEquals("true", obj(reset)["deviceTrusted"]!!.jsonPrimitive.content)
+        assertEquals(0L, db.tx { query("SELECT count(*) FROM sync_events") { it.getLong(1) }.single() })
+        assertEquals(listOf("recovery", secondId), db.tx { query("SELECT recipient FROM vault_keys ORDER BY recipient <> 'recovery'") { it.getString(1) } })
+        // The old phone's token no longer works at all.
+        assertEquals(HttpStatusCode.Unauthorized, owner.get("/api/v1/vault") { header(HttpHeaders.Authorization, "Bearer $first") }.status)
+    }
+
     @Test
     fun aPhoneApprovesABrowserWhichThenGetsItsWrappedKey() = api { owner ->
         val phone = owner.trustedPhone()

@@ -57,7 +57,7 @@ class ApiTest {
 
     @BeforeEach
     fun clean() = runBlocking<Unit> {
-        db.tx { update("TRUNCATE users, user_sessions, devices, pairing_codes, device_tokens, revoked_devices, sync_events, sync_checkpoints, backups, account_settings, audit_events CASCADE") }
+        db.tx { update("TRUNCATE users, user_sessions, devices, pairing_codes, device_tokens, revoked_devices, sync_events, sync_checkpoints, backups, account_settings, audit_events, invites CASCADE") }
     }
 
     private fun api(block: suspend ApplicationTestBuilder.(HttpClient) -> Unit) = testApplication {
@@ -178,10 +178,24 @@ class ApiTest {
         assertEquals(HttpStatusCode.Unauthorized, phone.get("/api/v1/device") { header(HttpHeaders.Authorization, "Bearer $token") }.status)
         assertEquals(1, db.tx { query("SELECT count(*) FROM revoked_devices") { it.getInt(1) }.single() })
 
-        // A revoked device id cannot sneak back in with a new code.
+        // The owner can let a revoked phone back in with a fresh code; its old token stays dead,
+        // and it returns unapproved.
         val code2 = json(client.postJson("/api/v1/devices/pairing-codes", "{}").bodyAsText())["code"]!!.jsonPrimitive.content
         val back = phone.postJson("/api/v1/devices/register", """{"pairingCode":"$code2","deviceId":"$deviceId","name":"Galaxy","platform":"android"}""", csrf = false)
-        assertEquals(HttpStatusCode.Conflict, back.status)
+        assertEquals(HttpStatusCode.Created, back.status)
+        assertEquals(HttpStatusCode.Unauthorized, phone.get("/api/v1/device") { header(HttpHeaders.Authorization, "Bearer $token") }.status)
+        val again = json(Json.parseToJsonElement(client.get("/api/v1/devices").bodyAsText()).jsonArray.single().toString())
+        assertEquals("null", again["revokedAt"].toString())
+        assertEquals("false", again["vaultTrusted"]!!.jsonPrimitive.content)
+        assertEquals(0, db.tx { query("SELECT count(*) FROM revoked_devices") { it.getInt(1) }.single() })
+
+        // Another account cannot take this device id, even with its own valid code.
+        val invite = json(client.postJson("/api/v1/invites", "{}").bodyAsText())["code"]!!.jsonPrimitive.content
+        val other = createClient { install(HttpCookies) }
+        other.postJson("/api/v1/auth/register", """{"username":"other","password":"another long passphrase","invite":"$invite"}""")
+        val otherCode = json(other.postJson("/api/v1/devices/pairing-codes", "{}").bodyAsText())["code"]!!.jsonPrimitive.content
+        val stolen = phone.postJson("/api/v1/devices/register", """{"pairingCode":"$otherCode","deviceId":"$deviceId","name":"Galaxy","platform":"android"}""", csrf = false)
+        assertEquals(HttpStatusCode.Conflict, stolen.status)
     }
 
     @Test

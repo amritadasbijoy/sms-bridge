@@ -429,8 +429,22 @@ class DeviceService(private val db: Db) {
                     "INSERT INTO devices (id, user_id, name, platform, public_key, enc_public_key, sign_public_key) VALUES (?, ?, ?, ?, ?, ?, ?)",
                     deviceId, userId, name, request.platform, request.publicKey, request.encPublicKey, request.signPublicKey,
                 )
-                existing.first != userId || existing.second != null ->
-                    throw ApiException(HttpStatusCode.Conflict, "device_unavailable", "This device id cannot be registered. Reinstall SMS Bridge to get a new one.")
+                existing.first != userId ->
+                    throw ApiException(HttpStatusCode.Conflict, "device_unavailable", "This device id belongs to another account. Reinstall SMS Bridge to get a new one.")
+                existing.second != null -> {
+                    // A revoked phone comes back only with a fresh code from the owner's own session.
+                    // It returns unapproved, with nothing wrapped for it, and its old tokens stay dead.
+                    update(
+                        """
+                        UPDATE devices SET name = ?, public_key = ?, enc_public_key = ?, sign_public_key = ?,
+                            revoked_at = NULL, vault_trusted_at = NULL WHERE id = ?
+                        """.trimIndent(),
+                        name, request.publicKey, request.encPublicKey, request.signPublicKey, deviceId,
+                    )
+                    update("DELETE FROM vault_keys WHERE user_id = ? AND recipient = ?", userId, deviceId.toString())
+                    update("DELETE FROM revoked_devices WHERE device_id = ?", deviceId)
+                    audit(userId, deviceId, "device_reconnected", "ok", ip)
+                }
                 else -> {
                     // Re-pairing the same phone: old tokens stop working.
                     update("UPDATE device_tokens SET revoked_at = now() WHERE device_id = ? AND revoked_at IS NULL", deviceId)

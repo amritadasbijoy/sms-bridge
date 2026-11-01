@@ -43,7 +43,7 @@ export interface Device {
   lastSeenAt: string | null; revokedAt: string | null; vaultTrusted: boolean;
 }
 export interface WrappedKey { keyVersion: number; wrappedKey: string }
-export interface BrowserVault { exists: boolean; currentVersion: number | null; recoveryKeys: WrappedKey[] }
+export interface BrowserVault { exists: boolean; currentVersion: number | null; recoveryKeys: WrappedKey[]; approvedPhones: number }
 export interface StoredEvent {
   eventId: string; deviceId: string; deviceSequence: number; serverSequence: number;
   keyVersion: number; ciphertext: string; signature: string;
