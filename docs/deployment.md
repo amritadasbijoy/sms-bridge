@@ -69,7 +69,8 @@ sms.techistbd.com {
 	header Strict-Transport-Security "max-age=31536000"
 	# handle blocks are exclusive and tried in order: sign-up is closed publicly.
 	handle /api/v1/auth/register {
-		respond "Registration is closed." 403
+		header Content-Type application/json
+		respond `{"error":"registration_closed","message":"Registration is closed on this server."}` 403
 	}
 	@api path /api/* /health
 	handle @api {
@@ -81,7 +82,9 @@ sms.techistbd.com {
 }
 ```
 
-Create the owner account (only once), from the Mac:
+The owner account was created on 2026-11-02 (by temporarily letting the owner's IP through this
+rule, then removing the exception). The server itself now also refuses new accounts. To create the
+first account on a fresh install instead, use a tunnel from the Mac:
 
 ```bash
 ssh -L 8081:127.0.0.1:8081 vps     # keep open, then open http://localhost:8081 and choose "Create an account"
