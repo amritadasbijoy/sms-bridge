@@ -23,7 +23,14 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   });
   if (res.status === 204) return undefined as T;
   const text = await res.text();
-  const data = text ? JSON.parse(text) : undefined;
+  let data;
+  try {
+    data = text ? JSON.parse(text) : undefined;
+  } catch {
+    // A proxy answered with plain text or HTML: report the status, not "could not reach the server".
+    if (!res.ok) throw new ApiError(res.status, "http_error", text.trim().slice(0, 200) || `Request failed (${res.status}).`);
+    throw new ApiError(res.status, "bad_response", "The server sent an unexpected response.");
+  }
   if (!res.ok) {
     throw new ApiError(res.status, data?.error ?? "http_error", data?.message ?? `Request failed (${res.status}).`);
   }
