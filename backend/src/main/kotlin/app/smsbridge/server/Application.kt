@@ -55,7 +55,17 @@ fun main() {
 @Serializable data class Me(val userId: String, val username: String)
 @Serializable data class AuthStatus(val registrationOpen: Boolean)
 @Serializable data class PairingCodeResponse(val code: String, val expiresAt: String)
-@Serializable data class RegisterDevice(val pairingCode: String, val deviceId: String, val name: String, val platform: String, val publicKey: String? = null)
+@Serializable data class RegisterDevice(
+    val pairingCode: String,
+    val deviceId: String,
+    val name: String,
+    val platform: String,
+    val publicKey: String? = null,
+    /** X25519 public key, raw 32 bytes base64 (Phase 6: receives wrapped vault keys). */
+    val encPublicKey: String? = null,
+    /** Ed25519 public key, raw 32 bytes base64 (Phase 6: signs uploaded events). */
+    val signPublicKey: String? = null,
+)
 @Serializable data class DeviceToken(val deviceId: String, val deviceToken: String)
 @Serializable data class DeviceInfo(val id: String, val name: String, val platform: String, val createdAt: String, val lastSeenAt: String?, val revokedAt: String?)
 @Serializable data class RevokeRequest(val reason: String? = null)
@@ -72,6 +82,7 @@ private val SESSION_LIFETIME = java.time.Duration.ofDays(7)
 private val SESSION_IDLE = java.time.Duration.ofHours(24)
 private val PAIRING_LIFETIME = java.time.Duration.ofMinutes(10)
 private const val MAX_BODY_BYTES = 64 * 1024L
+private const val MAX_SYNC_BODY_BYTES = 4L * 1024 * 1024
 private val AUTH_LIMIT = RateLimitName("auth")
 
 // ---- Module ----------------------------------------------------------------------------------
@@ -110,7 +121,8 @@ fun Application.module(config: Config, db: Db) {
     // Small JSON bodies only on these endpoints (sync uploads in Phase 6 get their own limit).
     intercept(ApplicationCallPipeline.Plugins) {
         val length = call.request.contentLength()
-        if (length != null && length > MAX_BODY_BYTES) {
+        val limit = if (call.request.path() == "/api/v1/sync/events") MAX_SYNC_BODY_BYTES else MAX_BODY_BYTES
+        if (length != null && length > limit) {
             call.respond(HttpStatusCode.PayloadTooLarge, ApiError("too_large", "Request too large."))
             finish()
         }
@@ -118,6 +130,8 @@ fun Application.module(config: Config, db: Db) {
 
     val auth = AuthService(db, config)
     val devices = DeviceService(db)
+    val sync = SyncService(db)
+    install(io.ktor.server.websocket.WebSockets) { pingPeriodMillis = 30_000 }
 
     routing {
         get("/health") {
@@ -131,6 +145,7 @@ fun Application.module(config: Config, db: Db) {
         route("/api/v1") {
             authRoutes(auth, config)
             deviceRoutes(auth, devices)
+            vaultAndSyncRoutes(auth, sync)
         }
     }
 }
@@ -338,6 +353,8 @@ class DeviceService(private val db: Db) {
         val name = request.name.trim().take(64).ifEmpty { "Android device" }
         if (request.platform !in setOf("android")) throw ApiException(HttpStatusCode.BadRequest, "invalid_platform", "Unsupported platform.")
         if ((request.publicKey?.length ?: 0) > 512) throw ApiException(HttpStatusCode.BadRequest, "invalid_key", "Public key too long.")
+        request.encPublicKey?.let { requireRawKey(it) }
+        request.signPublicKey?.let { requireRawKey(it) }
         val codeHash = Secrets.sha256(Secrets.normalizePairingCode(request.pairingCode))
         val token = Secrets.token()
         db.tx {
@@ -353,15 +370,24 @@ class DeviceService(private val db: Db) {
             val existing = query("SELECT user_id, revoked_at FROM devices WHERE id = ?", deviceId) { it.uuid("user_id") to it.time("revoked_at") }.singleOrNull()
             when {
                 existing == null -> update(
-                    "INSERT INTO devices (id, user_id, name, platform, public_key) VALUES (?, ?, ?, ?, ?)",
-                    deviceId, userId, name, request.platform, request.publicKey,
+                    "INSERT INTO devices (id, user_id, name, platform, public_key, enc_public_key, sign_public_key) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    deviceId, userId, name, request.platform, request.publicKey, request.encPublicKey, request.signPublicKey,
                 )
                 existing.first != userId || existing.second != null ->
                     throw ApiException(HttpStatusCode.Conflict, "device_unavailable", "This device id cannot be registered. Reinstall SMS Bridge to get a new one.")
                 else -> {
                     // Re-pairing the same phone: old tokens stop working.
                     update("UPDATE device_tokens SET revoked_at = now() WHERE device_id = ? AND revoked_at IS NULL", deviceId)
-                    update("UPDATE devices SET name = ?, public_key = COALESCE(?, public_key) WHERE id = ?", name, request.publicKey, deviceId)
+                    // New keys mean the phone lost its vault keys: it must be approved again.
+                    update(
+                        """
+                        UPDATE devices SET name = ?, public_key = COALESCE(?, public_key),
+                            enc_public_key = COALESCE(?, enc_public_key), sign_public_key = COALESCE(?, sign_public_key),
+                            vault_trusted_at = CASE WHEN ? IS NULL THEN vault_trusted_at ELSE NULL END
+                        WHERE id = ?
+                        """.trimIndent(),
+                        name, request.publicKey, request.encPublicKey, request.signPublicKey, request.encPublicKey, deviceId,
+                    )
                 }
             }
             update("INSERT INTO device_tokens (token_hash, device_id) VALUES (?, ?)", Secrets.sha256(token), deviceId)

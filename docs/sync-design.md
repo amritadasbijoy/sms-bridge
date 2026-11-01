@@ -1,6 +1,6 @@
 # Phase 6 design: encrypted sync and key management
 
-**Status: proposal for review.** No code is written against this yet.
+**Status: approved 2026-11-01** (all three decisions as recommended: the model as proposed, the event type encrypted, a generated recovery key).
 
 ## Goals and non-goals
 
