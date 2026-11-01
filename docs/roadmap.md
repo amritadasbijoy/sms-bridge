@@ -4,7 +4,7 @@ Phases run in order; each must pass its acceptance criteria before the next star
 
 | Phase | Scope | Status |
 |---|---|---|
-| 1 | Android project, permissions, SMS reader, Room, incoming receiver, WorkManager queue, dashboard | **Built and tested on JVM; on-device acceptance pending** |
+| 1 | Android project, permissions, SMS reader, Room, incoming receiver, WorkManager queue, dashboard | **Done: acceptance verified on Galaxy A52 (Android 14)** |
 | 2 | Default SMS handler (SMS_DELIVER, send UI, multipart send, delivery reports, RoleManager flow), two-way capture | Next |
 | 3 | Backup package (manifest.json, messages.xml, metadata.json, checksums.sha256), JSON/CSV export, SAF, restore with temporary default-role guidance | |
 | 4 | Encrypted backup archive, Wi-Fi transfer (NSD + TLS + QR pairing, resumable batches), then Wi-Fi Direct | |
