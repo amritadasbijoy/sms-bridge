@@ -51,8 +51,8 @@ fun main() {
 // ---- API types -------------------------------------------------------------------------------
 
 @Serializable data class ApiError(val error: String, val message: String)
-@Serializable data class Credentials(val username: String, val password: String)
-@Serializable data class Me(val userId: String, val username: String)
+@Serializable data class Credentials(val username: String, val password: String, val totp: String? = null)
+@Serializable data class Me(val userId: String, val username: String, val totpEnabled: Boolean = false)
 @Serializable data class AuthStatus(val registrationOpen: Boolean)
 @Serializable data class PairingCodeResponse(val code: String, val expiresAt: String)
 @Serializable data class RegisterDevice(
@@ -67,7 +67,10 @@ fun main() {
     val signPublicKey: String? = null,
 )
 @Serializable data class DeviceToken(val deviceId: String, val deviceToken: String)
-@Serializable data class DeviceInfo(val id: String, val name: String, val platform: String, val createdAt: String, val lastSeenAt: String?, val revokedAt: String?)
+@Serializable data class DeviceInfo(
+    val id: String, val name: String, val platform: String, val createdAt: String,
+    val lastSeenAt: String?, val revokedAt: String?, val vaultTrusted: Boolean = false,
+)
 @Serializable data class RevokeRequest(val reason: String? = null)
 @Serializable data class Health(val status: String, val database: String)
 
@@ -89,7 +92,7 @@ private val AUTH_LIMIT = RateLimitName("auth")
 
 fun Application.module(config: Config, db: Db) {
     if (config.trustProxy) install(XForwardedHeaders)
-    install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true; explicitNulls = true }) }
+    install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true; explicitNulls = true; encodeDefaults = true }) }
     install(DefaultHeaders) {
         header("X-Content-Type-Options", "nosniff")
         header("X-Frame-Options", "DENY")
@@ -128,7 +131,8 @@ fun Application.module(config: Config, db: Db) {
         }
     }
 
-    val auth = AuthService(db, config)
+    val twoFactor = TwoFactorService(db)
+    val auth = AuthService(db, config, twoFactor)
     val devices = DeviceService(db)
     val sync = SyncService(db)
     install(io.ktor.server.websocket.WebSockets) { pingPeriodMillis = 30_000 }
@@ -146,6 +150,7 @@ fun Application.module(config: Config, db: Db) {
             authRoutes(auth, config)
             deviceRoutes(auth, devices)
             vaultAndSyncRoutes(auth, sync)
+            twoFactorRoutes(auth, twoFactor, db)
         }
     }
 }
@@ -164,11 +169,17 @@ private fun Route.authRoutes(auth: AuthService, config: Config) = route("/auth")
         }
         post("/login") {
             val body = call.receive<Credentials>()
-            val user = auth.login(body.username, body.password.toCharArray(), call.ip())
-                ?: throw ApiException(HttpStatusCode.Unauthorized, "invalid_credentials", "Wrong username or password.")
-            val token = auth.createSession(user.first, call.request.header(HttpHeaders.UserAgent))
+            val result = auth.login(
+                body.username, body.password.toCharArray(), call.ip(),
+                totp = body.totp, browserToken = call.request.cookies[BROWSER_COOKIE],
+                userAgent = call.request.header(HttpHeaders.UserAgent),
+            ) ?: throw ApiException(HttpStatusCode.Unauthorized, "invalid_credentials", "Wrong username or password.")
+            result.newBrowserToken?.let {
+                call.response.cookies.append(trustedBrowserCookie(it, config, TRUSTED_BROWSER_LIFETIME.seconds.toInt()))
+            }
+            val token = auth.createSession(result.userId, call.request.header(HttpHeaders.UserAgent))
             call.setSessionCookie(token, config)
-            call.respond(Me(user.first.toString(), user.second))
+            call.respond(Me(result.userId.toString(), result.username, result.totpEnabled))
         }
     }
     post("/logout") {
@@ -179,7 +190,7 @@ private fun Route.authRoutes(auth: AuthService, config: Config) = route("/auth")
     }
     get("/me") {
         val user = auth.requireUser(call)
-        call.respond(Me(user.first.toString(), user.second))
+        call.respond(Me(user.first.toString(), user.second, auth.twoFactor.enabled(user.first)))
     }
 }
 
@@ -210,7 +221,9 @@ private fun ApplicationCall.requireCsrfHeader() {
     }
 }
 
-class AuthService(private val db: Db, private val config: Config) {
+data class LoginResult(val userId: UUID, val username: String, val totpEnabled: Boolean, val newBrowserToken: String?)
+
+class AuthService(private val db: Db, private val config: Config, val twoFactor: TwoFactorService) {
 
     suspend fun registrationOpen(): Boolean =
         config.allowRegistration || db.tx { query("SELECT count(*) FROM users") { it.getLong(1) }.single() == 0L }
@@ -242,17 +255,52 @@ class AuthService(private val db: Db, private val config: Config) {
         }
     }
 
-    /** Returns (userId, username) or null. Same error and similar timing whether or not the user exists. */
-    suspend fun login(username: String, password: CharArray, ip: String): Pair<UUID, String>? {
+    /**
+     * Password check, then (when 2FA is on) a trusted-browser cookie or a valid authenticator code.
+     * Returns null for a wrong password, with the same error and similar timing whether or not the
+     * user exists. Throws `totp_required` (401) when only the second factor is missing.
+     */
+    suspend fun login(
+        username: String,
+        password: CharArray,
+        ip: String,
+        totp: String? = null,
+        browserToken: String? = null,
+        userAgent: String? = null,
+        skipSecondFactor: Boolean = false,
+    ): LoginResult? {
         val row = db.tx {
-            query("SELECT id, username, password_hash FROM users WHERE lower(username) = lower(?)", username.trim()) {
-                Triple(it.uuid("id"), it.getString("username"), it.getString("password_hash"))
+            query("SELECT id, username, password_hash, totp_enabled_at FROM users WHERE lower(username) = lower(?)", username.trim()) {
+                Triple(it.uuid("id"), it.getString("username"), it.getString("password_hash")) to (it.time("totp_enabled_at") != null)
             }.singleOrNull()
         }
-        val ok = Passwords.verify(password, row?.third ?: DUMMY_HASH) && row != null
+        val passwordOk = Passwords.verify(password, row?.first?.third ?: DUMMY_HASH) && row != null
         password.fill('\u0000')
-        db.tx { audit(row?.first, null, "login", if (ok) "ok" else "denied", ip) }
-        return if (ok) row!!.first to row.second else null
+        if (!passwordOk) {
+            db.tx { audit(row?.first?.first, null, "login", "denied", ip) }
+            return null
+        }
+        val (user, totpEnabled) = row!!
+        var newBrowserToken: String? = null
+        if (totpEnabled && !skipSecondFactor) {
+            val outcome = db.tx {
+                when {
+                    twoFactor.isTrustedBrowser(this, user.first, browserToken) -> "trusted_browser"
+                    twoFactor.verifyAtLogin(this, user.first, totp) -> "totp"
+                    else -> null
+                }.also { audit(user.first, null, "login_second_factor", it ?: if (totp.isNullOrBlank()) "required" else "denied", ip) }
+            }
+            when (outcome) {
+                null -> if (totp.isNullOrBlank()) {
+                    throw ApiException(HttpStatusCode.Unauthorized, "totp_required", "Enter the code from your authenticator app.")
+                } else {
+                    throw ApiException(HttpStatusCode.Unauthorized, "invalid_credentials", "Wrong code.")
+                }
+                "totp" -> newBrowserToken = twoFactor.createTrustedBrowser(user.first, userAgent)
+            }
+        }
+        db.tx { audit(user.first, null, "login", "ok", ip) }
+        return LoginResult(user.first, user.second, totpEnabled, newBrowserToken)
     }
 
     suspend fun createSession(userId: UUID, userAgent: String?): String {
@@ -441,5 +489,6 @@ class DeviceService(private val db: Db) {
         createdAt = time("created_at").toString(),
         lastSeenAt = time("last_seen_at")?.toString(),
         revokedAt = time("revoked_at")?.toString(),
+        vaultTrusted = time("vault_trusted_at") != null,
     )
 }

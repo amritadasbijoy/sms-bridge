@@ -247,7 +247,30 @@ phone ── POST /devices/register {pairingCode, deviceId, name, platform, publ
 phone ── Authorization: Bearer <deviceToken> ──▶ /api/v1/device (and the sync endpoints, Phase 6)
 ```
 
+Phase 7 adds `users.totp_*` and `trusted_browsers` (V3), `/api/v1/auth/totp/{setup,enable,disable}`,
+`/api/v1/auth/browsers/forget` and `GET /api/v1/vault/browser`. The full list is in `openapi.yaml`.
+
 Deployment: see [deployment.md](deployment.md).
+
+## Web dashboard (Phase 7)
+
+`web/`: Next.js 15 (Pages Router) built as a static export, React 19, Tailwind with shadcn-style
+components. No Node server runs in production: Caddy serves the files and the API is on the same
+origin, so the `SameSite=Strict` session cookie works and the CSP can be `script-src 'self'` (the Pages
+Router export has no inline executable scripts).
+
+```
+sign in (password [+ TOTP on a new browser]) ──▶ sb_session cookie (+ sb_browser after a code)
+recovery key (typed) ── Crockford base32 ──▶ 16 bytes
+GET /vault/browser ──▶ recovery-wrapped vault keys ── HKDF + AES-GCM (WebCrypto) ──▶ non-extractable CryptoKey
+GET /sync/events?after=n (pages of 1000) ──▶ AES-256-GCM decrypt with AAD ──▶ payload JSON
+WebSocket /sync/stream ──▶ {"latest":n} ──▶ fetch the new pages
+```
+
+`lib/messages.ts` reduces events to messages: newest event per (device, messageId), then copies of
+the same SMS from different phones merged by (box, address key, date, body); `SMS_DELETED` hides a
+message and is counted, never silently dropped. Keys and plaintext live only in React state: a
+reload, Lock, sign-out or 15 minutes idle forgets them. The dashboard is read-only.
 
 ## Local database (Room, schema v2)
 

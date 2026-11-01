@@ -10,9 +10,9 @@ hundred MB), Docker Engine with the Compose plugin, and a DNS name pointing at t
 
 ```
 infrastructure/
-├── docker-compose.yml     db (PostgreSQL 16, internal network only) + api (Ktor) + proxy (Caddy, profile "proxy")
+├── docker-compose.yml     db (PostgreSQL 16, internal network only) + api (Ktor) + web (dashboard) + proxy (Caddy, profile "proxy")
 ├── .env.example           copy to .env (never commit .env)
-├── proxy/Caddyfile        HTTPS with automatic certificates; exposes only /api/* and /health
+├── proxy/Caddyfile        HTTPS with automatic certificates; /api/* and /health to api, the rest to web
 └── scripts/backup-db.sh   encrypted pg_dump with retention
 ```
 
@@ -20,7 +20,8 @@ infrastructure/
 |---|---|---|
 | `db` | none (internal Docker network with no internet route) | data in volume `db-data`, health check |
 | `api` | `127.0.0.1:8080` only; public traffic goes through Caddy | non-root user, read-only root FS, `no-new-privileges`, health check |
-| `proxy` | `:80`, `:443` | HSTS, only the API paths proxied |
+| `web` | `127.0.0.1:8081` only | static files only, read-only root FS, `no-new-privileges`, strict CSP (`script-src 'self'`) |
+| `proxy` | `:80`, `:443` | HSTS; API paths to `api`, everything else to `web` |
 
 All services: `restart: unless-stopped`, JSON log rotation (10 MB × 5).
 

@@ -4,7 +4,7 @@ A privacy-first SMS manager for Android: a local, on-device archive of your text
 with backup/restore, device-to-device transfer and optional end-to-end-encrypted sync to a
 server you host yourself.
 
-**Status: Phases 1–6 done; Phase 7 (web dashboard) next.** See [docs/PROGRESS.md](docs/PROGRESS.md).
+**Status: Phases 1–7 done; Phase 8 (multi-device sync polish) next.** See [docs/PROGRESS.md](docs/PROGRESS.md).
 
 What works today:
 
@@ -19,6 +19,9 @@ What works today:
 - **Phone-to-phone transfer** over your own Wi-Fi: QR pairing, pinned TLS, resumable.
 - **Self-hosted server + end-to-end encrypted sync:** accounts, device pairing and approval with safety codes, recovery key, signed encrypted uploads (the server cannot read messages);
   revocation, Docker Compose stack with an HTTPS proxy and encrypted database backups.
+- **Web dashboard (read-only):** sign in with optional two-factor (TOTP), unlock with the recovery
+  key, and read inbox, sent and conversations, decrypted only in the browser tab. Device pairing and
+  revocation, sync status.
 
 ## Repository layout
 
@@ -26,13 +29,15 @@ What works today:
 sms-bridge/
 ├── android/          Native Android app (Kotlin, Compose, Hilt, Room, WorkManager)
 ├── backend/          Self-hosted server (Kotlin, Ktor, PostgreSQL, Flyway)
+├── web/              Web dashboard (Next.js static export, TypeScript, Tailwind)
 ├── infrastructure/   Docker Compose, Caddy, backup script
 ├── docs/             Architecture, security, development, roadmap, progress
+├── testdata/         Cross-language crypto vectors (made by the app, checked by the web tests)
 ├── tools/            Synthetic test-data generator
-└── .github/          CI (Android build + unit tests; backend integration tests)
+└── .github/          CI (Android, backend integration tests, web tests + build)
 ```
 
-`web/` and `shared/` are added in the phases that build them (see [docs/roadmap.md](docs/roadmap.md));
+`shared/` is added in the phase that builds it (see [docs/roadmap.md](docs/roadmap.md));
 empty placeholder folders are deliberately not committed. Deployment: [docs/deployment.md](docs/deployment.md).
 
 ## Quick start

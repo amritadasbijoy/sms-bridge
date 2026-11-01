@@ -1,5 +1,6 @@
 # SMS Bridge self-hosted stack.
-#   Local:      docker compose up -d                        (API on http://127.0.0.1:8080)
+#   Local:      docker compose up -d                        (dashboard on http://127.0.0.1:8081,
+#                                                            API on http://127.0.0.1:8080)
 #   With HTTPS: docker compose --profile proxy up -d        (Caddy on :80/:443, needs SMSBRIDGE_DOMAIN)
 # Secrets come from .env (copy .env.example); never commit .env.
 
@@ -52,11 +53,25 @@ services:
     security_opt: ["no-new-privileges:true"]
     logging: *logging
 
+  web:
+    build: ../web
+    image: sms-bridge-web:local
+    restart: unless-stopped
+    depends_on: [api]
+    # Static dashboard; also proxies /api so local testing has a single origin.
+    ports:
+      - "127.0.0.1:${SMSBRIDGE_WEB_PORT:-8081}:80"
+    networks: [edge]
+    read_only: true
+    tmpfs: [/data, /config]
+    security_opt: ["no-new-privileges:true"]
+    logging: *logging
+
   proxy:
     profiles: ["proxy"]
     image: caddy:2.8.4-alpine
     restart: unless-stopped
-    depends_on: [api]
+    depends_on: [api, web]
     environment:
       # Required for this profile; Caddy refuses to start without it. (Not `:?` here: Compose
       # would then demand it even when the proxy profile is not used.)

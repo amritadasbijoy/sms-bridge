@@ -11,7 +11,7 @@ Phases run in order; each must pass its acceptance criteria before the next star
 | 4 | Encrypted backup archive, Wi-Fi transfer (NSD + TLS + QR pairing, resumable batches), then Wi-Fi Direct | **Done (emulator-verified): 4a encrypted backup, 4b Wi-Fi transfer (QR + pinned TLS, resumable). Deferred: NSD discovery, Wi-Fi Direct** |
 | 5 | Ktor backend, PostgreSQL, auth, device registration, OpenAPI, Docker Compose | **Done: 13 integration tests on PostgreSQL 16; Compose stack verified locally (not deployed)** |
 | 6 | Encrypted event upload, server sequence, acks, checkpoints, WebSocket notify | **Done: verified end to end with 2 emulators and the local stack (approval, recovery, 20k events, 0 plaintext)** |
-| 7 | Next.js dashboard, browser vault unlock, client-side decryption | |
+| 7 | Next.js dashboard, browser vault unlock, client-side decryption | **Done: verified in a browser against 20,009 synthetic events; TOTP 2FA** |
 | 8 | Multi-device sync and device management/revocation | |
 | 9 | Security, compatibility (Android 8 to 15, OEMs), performance testing | |
 | 10 | Signed private APK, VPS production deployment | |

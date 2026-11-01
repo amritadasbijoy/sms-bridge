@@ -110,7 +110,23 @@ Known limitations:
 | Network | PostgreSQL on an internal-only Docker network; API bound to 127.0.0.1; only Caddy is public |
 | Data at rest | `sync_events` stores ciphertext only (Phase 6); DB backups encrypted (AES-256, PBKDF2 600k) |
 
-Known limitations: no 2FA yet (Phase 7, for new browsers); passwords pass through an immutable JVM
+### Web dashboard (Phase 7)
+
+| Area | Control |
+|---|---|
+| Two-factor | Optional TOTP (RFC 6238, SHA-1, 6 digits, 30 s, ±1 step). Each code works once (last accepted step stored). `totp_required` is returned only after a correct password. Turning it off needs the password and a code. |
+| Trusted browsers | After a correct code the browser gets `sb_browser` (256-bit, HttpOnly, SameSite=Strict, 90 days; SHA-256 stored). "Forget all browsers" and disabling 2FA delete them. |
+| Vault in the browser | The recovery key is typed into the tab and never sent. The server returns only recovery-wrapped keys. The vault key is imported as a **non-extractable** WebCrypto key; plaintext stays in memory. Reload, Lock, sign-out or 15 minutes idle forget it. |
+| Integrity | Events are AES-GCM with AAD (event id, device, sequence, key version); altered or misattributed ciphertext is rejected and counted, never shown. |
+| XSS | Message text is rendered as React text (no HTML). CSP `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'`, verified with no violations in normal use. |
+| Scope | Read-only: no send, delete or edit endpoints are used. |
+
+Limitation: a browser unlocks with the recovery key, so anyone holding the recovery key *and* the
+sign-in can read messages. Approving a browser from a phone with a safety code (no recovery key) is
+planned. Ed25519 event signatures are verified by the server, not yet in the browser (they only
+distinguish devices that already hold the vault key).
+
+Known limitations (server): passwords pass through an immutable JVM
 `String` during hashing; the rate limiter is in-memory, per instance.
 
 ### Known Phase 1 gaps

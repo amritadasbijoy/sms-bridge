@@ -10,12 +10,13 @@
 		-Server
 	}
 
-	# Only the API and health check are exposed; everything else is 404.
+	# The API directly (one hop, so SMSBRIDGE_TRUST_PROXY=true sees the real client address);
+	# everything else is the static dashboard, which sets its own CSP and security headers.
 	@api path /api/* /health
 	handle @api {
 		reverse_proxy api:8080
 	}
 	handle {
-		respond 404
+		reverse_proxy web:80
 	}
 }
