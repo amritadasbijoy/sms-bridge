@@ -47,6 +47,51 @@ Then create the account at once (the first registration wins; after that registr
 Note: Docker publishes ports by editing iptables directly, which bypasses `ufw`. That is why the
 API binds to `127.0.0.1` and the database publishes nothing; only Caddy's 80/443 are public.
 
+## Current deployment (2026-11-02)
+
+Production runs on the owner's VPS (Ubuntu 24.04, Docker 29) next to other services, so it does
+**not** use the bundled `proxy` container: the VPS already runs Caddy as a system service on 80/443.
+
+| Item | Value |
+|---|---|
+| Code | `/opt/sms-bridge` (a `git archive` of `develop` plus `backend/build/install`) |
+| Containers | `db`, `api` (127.0.0.1:8080), `web` (127.0.0.1:8081); `docker compose up -d db api web` |
+| `.env` | generated on the server (random DB password), mode 600, `COOKIE_SECURE=true`, `TRUST_PROXY=true`, registration closed |
+| Public entry | host Caddy site `sms.techistbd.com`: `/api/*` and `/health` → 8080, everything else → 8081 |
+| Sign-up | `/api/v1/auth/register` answered 403 by Caddy; the owner account is created once through an SSH tunnel |
+| Backups | root cron 03:15 → `/var/backups/smsbridge` (encrypted, 14 kept), passphrase `/root/.smsbridge-backup-pass` |
+
+Host Caddy site (in `/etc/caddy/Caddyfile`, backed up before each change):
+
+```
+sms.techistbd.com {
+	encode zstd gzip
+	header Strict-Transport-Security "max-age=31536000"
+	# handle blocks are exclusive and tried in order: sign-up is closed publicly.
+	handle /api/v1/auth/register {
+		respond "Registration is closed." 403
+	}
+	@api path /api/* /health
+	handle @api {
+		reverse_proxy 127.0.0.1:8080
+	}
+	handle {
+		reverse_proxy 127.0.0.1:8081
+	}
+}
+```
+
+Create the owner account (only once), from the Mac:
+
+```bash
+ssh -L 8081:127.0.0.1:8081 vps     # keep open, then open http://localhost:8081 and choose "Create an account"
+```
+
+Update: on the Mac, `cd backend && ./gradlew installDist`, then package with
+`COPYFILE_DISABLE=1 tar` (macOS otherwise adds `._*` files that break the web build), copy to the VPS,
+unpack over `/opt/sms-bridge` (keeps `infrastructure/.env`), and run
+`docker compose up -d --build api web` there.
+
 ## Backups
 
 ```bash
