@@ -23,9 +23,10 @@ function Stat({ label, value, href }: { label: string; value: string; href?: str
 export default function Dashboard() {
   const { vault, store, live } = useSession();
   const [devices, setDevices] = useState<Device[] | null>(null);
+  // Reload when the vault opens: a phone connected by scanning appears without a page reload.
   useEffect(() => {
     api.devices().then(setDevices, () => setDevices([]));
-  }, []);
+  }, [vault.status]);
 
   const stats = useMemo(() => {
     const m = store.messages;

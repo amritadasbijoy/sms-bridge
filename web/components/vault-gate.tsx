@@ -3,6 +3,7 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Label } from "@/components/ui/input";
+import { PairQr } from "@/components/pair-qr";
 import { useSession } from "@/lib/session";
 
 
@@ -18,18 +19,39 @@ export function UnlockCard() {
   const [useRecovery, setUseRecovery] = useState(false);
 
   if (useRecovery) return <RecoveryKeyCard onBack={() => setUseRecovery(false)} />;
-  if (vault.status === "empty") {
+
+  if (vault.status === "approval") {
+    const connectPhone = vault.noApprovedPhone;
     return (
       <Card className="max-w-xl">
         <CardHeader>
-          <CardTitle>Connect a phone first</CardTitle>
+          <CardTitle>{connectPhone ? "Connect your phone" : "Scan with your phone"}</CardTitle>
           <CardDescription>
-            No phone syncs to this account yet. Create a pairing code on the Devices page, then in the SMS Bridge app open
-            Sync → Connect and enter this server&apos;s address and the code. Your messages appear here afterwards.
+            {connectPhone
+              ? "Open SMS Bridge on your Android phone, go to Sync and tap Scan QR code."
+              : "Open SMS Bridge on your phone, go to Sync and tap Scan to approve a browser."}{" "}
+            This page opens by itself once it is done.
           </CardDescription>
         </CardHeader>
-        <CardContent>
-          <Button variant="outline" onClick={() => void openWithBrowser()}>Check again</Button>
+        <CardContent className="space-y-4">
+          <PairQr withCode={connectPhone} deviceId={vault.deviceId} fingerprint={vault.fingerprint} />
+          {connectPhone && (
+            <p className="text-center text-xs text-muted-foreground">
+              No app yet? Install it from <a className="underline" href="/download/sms-bridge.apk">this link</a> on the phone.
+            </p>
+          )}
+          <details className="text-sm">
+            <summary className="cursor-pointer text-muted-foreground">Can&apos;t scan? Compare codes instead</summary>
+            <div className="mt-2 space-y-2">
+              <p className="text-center font-mono text-2xl tracking-widest">{vault.safetyCode}</p>
+              <p className="text-muted-foreground">
+                On a connected phone: Sync → Devices waiting for approval → Refresh → Approve…, only if it shows the same code.
+              </p>
+            </div>
+          </details>
+          <button className="text-sm text-primary underline-offset-4 hover:underline" onClick={() => setUseRecovery(true)}>
+            Use the recovery key instead
+          </button>
         </CardContent>
       </Card>
     );
@@ -37,69 +59,27 @@ export function UnlockCard() {
 
   return (
     <Card className="max-w-xl">
-      {vault.status === "approval" ? (
-        <>
-          <CardHeader>
-            <CardTitle>Approve this browser on your phone</CardTitle>
-            <CardDescription>
-              Your messages are end-to-end encrypted. A phone that already syncs can let this browser read them.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="rounded-md border bg-muted px-4 py-3 text-center">
-              <p className="text-xs text-muted-foreground">This browser&apos;s safety code</p>
-              <p className="font-mono text-3xl tracking-widest">{vault.safetyCode}</p>
-            </div>
-            {vault.noApprovedPhone && (
-              <Alert tone="warning">
-                <p className="font-medium">No phone is approved on this account right now, so nothing can approve this browser yet.</p>
-                <p className="mt-1">
-                  On your phone open SMS Bridge → Sync. If it is not connected, create a pairing code on the{" "}
-                  <a className="underline" href="/devices/">Devices</a> page and connect it. If it says{" "}
-                  <span className="font-medium">No approved device is left</span>, tap{" "}
-                  <span className="font-medium">Start over with this phone</span>. Then approve this browser as below.
-                </p>
-              </Alert>
-            )}
-            <ol className="list-decimal space-y-1 pl-5 text-sm">
-              <li>On your phone open SMS Bridge → <span className="font-medium">Sync</span>.</li>
-              <li>
-                Under <span className="font-medium">Devices waiting for approval</span>, tap Refresh, then{" "}
-                <span className="font-medium">Approve…</span> next to this browser.
-              </li>
-              <li>Approve only if the phone shows exactly the code above.</li>
-            </ol>
-            <p className="text-xs text-muted-foreground">Waiting for approval… this page opens by itself once approved.</p>
-            <button className="text-sm text-primary underline-offset-4 hover:underline" onClick={() => setUseRecovery(true)}>
-              Use the recovery key instead
-            </button>
-          </CardContent>
-        </>
-      ) : (
-        <>
-          <CardHeader>
-            <CardTitle>Your messages are locked</CardTitle>
-            <CardDescription>
-              {vault.status === "loading"
-                ? `Decrypting… ${vault.loaded.toLocaleString()} events`
-                : vault.status === "connecting" || vault.status === "unlocking"
-                  ? "Opening…"
-                  : "Messages are decrypted only in this browser."}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {vaultError && <Alert tone="error">{vaultError}</Alert>}
-            <Button onClick={() => void openWithBrowser()} disabled={vault.status !== "locked"}>
-              Open messages
-            </Button>
-            <div>
-              <button className="text-sm text-primary underline-offset-4 hover:underline" onClick={() => setUseRecovery(true)}>
-                Use the recovery key instead
-              </button>
-            </div>
-          </CardContent>
-        </>
-      )}
+      <CardHeader>
+        <CardTitle>Your messages are locked</CardTitle>
+        <CardDescription>
+          {vault.status === "loading"
+            ? `Decrypting… ${vault.loaded.toLocaleString()} events`
+            : vault.status === "connecting" || vault.status === "unlocking"
+              ? "Opening…"
+              : "Messages are decrypted only in this browser."}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {vaultError && <Alert tone="error">{vaultError}</Alert>}
+        <Button onClick={() => void openWithBrowser()} disabled={vault.status !== "locked"}>
+          Open messages
+        </Button>
+        <div>
+          <button className="text-sm text-primary underline-offset-4 hover:underline" onClick={() => setUseRecovery(true)}>
+            Use the recovery key instead
+          </button>
+        </div>
+      </CardContent>
     </Card>
   );
 }
