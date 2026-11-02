@@ -15,10 +15,33 @@ export function VaultGate({ children }: { children: ReactNode }) {
 }
 
 export function UnlockCard() {
-  const { vault, vaultError, openWithBrowser } = useSession();
+  const { vault, vaultError, openWithBrowser, requestConfirm } = useSession();
   const [useRecovery, setUseRecovery] = useState(false);
 
   if (useRecovery) return <RecoveryKeyCard onBack={() => setUseRecovery(false)} />;
+
+  if (vault.status === "approval" && vault.confirmRequested && !vault.noApprovedPhone) {
+    return (
+      <Card className="max-w-xl">
+        <CardHeader>
+          <CardTitle>Confirm on your phone</CardTitle>
+          <CardDescription>
+            {vault.confirmNumber == null
+              ? "Your phone got a notification. Open it (or SMS Bridge → Sync → Confirm with a number)."
+              : "On your phone, tap this number:"}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4 text-center">
+          {vault.confirmNumber == null ? (
+            <p className="py-6 text-sm text-muted-foreground">Waiting for your phone…</p>
+          ) : (
+            <p className="py-4 font-mono text-7xl font-semibold tracking-wider">{vault.confirmNumber}</p>
+          )}
+          <p className="text-xs text-muted-foreground">This page opens by itself once you tap it.</p>
+        </CardContent>
+      </Card>
+    );
+  }
 
   if (vault.status === "approval") {
     const connectPhone = vault.noApprovedPhone;
@@ -40,8 +63,16 @@ export function UnlockCard() {
               No app yet? Install it from <a className="underline" href="/download/sms-bridge.apk">this link</a> on the phone.
             </p>
           )}
+          {vault.confirmDeclined && (
+            <Alert tone="warning">Not confirmed: a different number was tapped on the phone. Try again.</Alert>
+          )}
+          {!connectPhone && (
+            <Button variant="outline" className="w-full" onClick={() => void requestConfirm()}>
+              Can&apos;t scan? Confirm on your phone instead
+            </Button>
+          )}
           <details className="text-sm">
-            <summary className="cursor-pointer text-muted-foreground">Can&apos;t scan? Compare codes instead</summary>
+            <summary className="cursor-pointer text-muted-foreground">Compare 6-digit codes instead</summary>
             <div className="mt-2 space-y-2">
               <p className="text-center font-mono text-2xl tracking-widest">{vault.safetyCode}</p>
               <p className="text-muted-foreground">

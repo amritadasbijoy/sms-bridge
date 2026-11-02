@@ -13,7 +13,8 @@ class CloudHttpException(val status: Int, val code: String, message: String) : I
 
 data class WrappedKeyDto(val keyVersion: Int, val wrappedKey: ByteArray)
 data class VaultStatusDto(val exists: Boolean, val currentVersion: Int?, val trusted: Boolean, val approvedDevices: Int)
-data class PendingDeviceDto(val id: String, val name: String, val encPublic: ByteArray, val signPublic: ByteArray)
+data class PendingDeviceDto(val id: String, val name: String, val encPublic: ByteArray, val signPublic: ByteArray, val confirmRequested: Boolean = false)
+data class ConnectRequestDto(val requestId: String, val secret: String, val number: Int, val expiresAt: String)
 data class UploadEventDto(val eventId: String, val deviceSequence: Long, val keyVersion: Int, val ciphertext: ByteArray, val signature: ByteArray)
 
 /**
@@ -59,13 +60,41 @@ class CloudApi(baseUrl: String, private val token: String? = null) {
         val array = callArray("GET", "/api/v1/vault/requests")
         return List(array.length()) { i ->
             val o = array.getJSONObject(i)
-            PendingDeviceDto(o.getString("id"), o.getString("name"), unb64(o.getString("encPublicKey")), unb64(o.getString("signPublicKey")))
+            PendingDeviceDto(
+                o.getString("id"), o.getString("name"), unb64(o.getString("encPublicKey")), unb64(o.getString("signPublicKey")),
+                o.optBoolean("confirmRequested", false),
+            )
         }
     }
 
     fun approve(deviceId: String, keys: List<WrappedKeyDto>) {
         call("POST", "/api/v1/vault/requests/$deviceId/approve", JSONObject().put("keys", keys(keys)))
     }
+
+    /** Number matching: the random challenge the browser turns into its number. */
+    fun setChallenge(deviceId: String, salt: ByteArray) {
+        call("POST", "/api/v1/vault/requests/$deviceId/challenge", JSONObject().put("salt", b64(salt)))
+    }
+
+    fun decline(deviceId: String) {
+        call("POST", "/api/v1/vault/requests/$deviceId/decline", JSONObject())
+    }
+
+    /** Long-polls the server's content-free change counter; returns it (possibly unchanged after the timeout). */
+    fun waitForNews(after: Long, timeoutSeconds: Int): Long =
+        call("GET", "/api/v1/notices/wait?after=$after&timeout=$timeoutSeconds").getLong("counter")
+
+    /** Asks to join [username]'s account (no session, no code); the owner confirms the number in the browser. */
+    fun createConnectRequest(username: String, name: String): ConnectRequestDto =
+        call("POST", "/api/v1/connect-requests", JSONObject().put("username", username).put("name", name)).let {
+            ConnectRequestDto(it.getString("requestId"), it.getString("secret"), it.getInt("number"), it.getString("expiresAt"))
+        }
+
+    /** "pending", "approved" (with the one-time pairing code), "rejected", "expired" or "delivered". */
+    fun connectRequestStatus(id: String, secret: String): Pair<String, String?> =
+        call("GET", "/api/v1/connect-requests/$id", headers = mapOf("X-Request-Secret" to secret)).let {
+            it.getString("status") to it.optString("pairingCode").takeIf { c -> c.isNotEmpty() }
+        }
 
     /** Returns the acknowledged event ids. */
     fun upload(events: List<UploadEventDto>): Set<String> {
@@ -93,18 +122,19 @@ class CloudApi(baseUrl: String, private val token: String? = null) {
         return List(array.length()) { i -> array.getJSONObject(i).let { WrappedKeyDto(it.getInt("keyVersion"), unb64(it.getString("wrappedKey"))) } }
     }
 
-    private fun call(method: String, path: String, body: JSONObject? = null): JSONObject =
-        raw(method, path, body).let { if (it.isBlank()) JSONObject() else JSONObject(it) }
+    private fun call(method: String, path: String, body: JSONObject? = null, headers: Map<String, String> = emptyMap()): JSONObject =
+        raw(method, path, body, headers).let { if (it.isBlank()) JSONObject() else JSONObject(it) }
 
     private fun callArray(method: String, path: String): JSONArray = JSONArray(raw(method, path, null))
 
-    private fun raw(method: String, path: String, body: JSONObject?): String {
+    private fun raw(method: String, path: String, body: JSONObject?, headers: Map<String, String> = emptyMap()): String {
         val connection = (URL(base + path).openConnection() as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = 15_000
             readTimeout = 30_000
             setRequestProperty("Accept", "application/json")
             token?.let { setRequestProperty("Authorization", "Bearer $it") }
+            headers.forEach { (k, v) -> setRequestProperty(k, v) }
             if (body != null) {
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json")

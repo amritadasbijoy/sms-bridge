@@ -43,7 +43,21 @@ sealed interface CloudState {
 
 data class HistoryStatus(val uploadedFrom: Long?, val fullHistoryQueued: Boolean)
 
-data class PendingApproval(val deviceId: String, val name: String, val safetyCode: String, internal val encPublic: ByteArray, internal val signPublic: ByteArray = ByteArray(0))
+data class PendingApproval(
+    val deviceId: String,
+    val name: String,
+    val safetyCode: String,
+    internal val encPublic: ByteArray,
+    internal val signPublic: ByteArray = ByteArray(0),
+    /** The browser asked to be confirmed by number on a phone. */
+    val confirmRequested: Boolean = false,
+)
+
+/** An open number-matching prompt on this phone. */
+data class ConfirmPrompt(val request: PendingApproval, val options: List<Int>, internal val correct: Int)
+
+/** This phone waits for its owner to tap [number] in the browser. */
+data class ConnectWait(val server: String, val requestId: String, val secret: String, val number: Int)
 
 /**
  * The phone's side of docs/sync-design.md. Secrets (device private keys, vault keys, device token,
@@ -151,6 +165,59 @@ class CloudRepository @Inject constructor(
         request.name
     }
 
+    // ---- Number matching -------------------------------------------------------------------
+
+    /**
+     * Opens the prompt for a browser that asked to be confirmed: sends a fresh random challenge
+     * (the browser turns it into the number it shows) and returns the three numbers to offer.
+     */
+    suspend fun startConfirm(request: PendingApproval): ConfirmPrompt = io {
+        val salt = ConfirmNumbers.newSalt()
+        api().setChallenge(request.deviceId, salt)
+        val correct = ConfirmNumbers.number(salt, PairLinks.fingerprint(request.encPublic, request.signPublic))
+        ConfirmPrompt(request, ConfirmNumbers.options(correct), correct)
+    }
+
+    /** The user tapped [picked]: the right number approves; anything else declines. True if approved. */
+    suspend fun finishConfirm(prompt: ConfirmPrompt, picked: Int?): Boolean = io {
+        if (picked == prompt.correct) {
+            approve(prompt.request)
+            true
+        } else {
+            api().decline(prompt.request.deviceId)
+            false
+        }
+    }
+
+    /** Asks to join [username]'s account without a QR code; the owner then taps [ConnectWait.number] in the browser. */
+    suspend fun requestConnect(serverUrl: String, username: String): ConnectWait = io {
+        val server = CloudApi.normalize(serverUrl)
+        val name = devices.localDevice.first()?.name ?: "Android device"
+        val r = CloudApi(server).createConnectRequest(username.trim(), name)
+        settings.putString(K_LAST_SERVER, server)
+        ConnectWait(server, r.requestId, r.secret, r.number)
+    }
+
+    /**
+     * Checks a connect request. Connects (as with a pairing code) once the owner tapped the right
+     * number and returns true; false while waiting; throws if it was refused or expired.
+     */
+    suspend fun checkConnect(wait: ConnectWait): Boolean = io {
+        val (status, code) = CloudApi(wait.server).connectRequestStatus(wait.requestId, wait.secret)
+        when (status) {
+            "pending" -> false
+            "approved" -> {
+                connect(wait.server, code ?: throw IllegalArgumentException("The server did not send a pairing code. Try again."))
+                true
+            }
+            "rejected" -> throw IllegalArgumentException("The number tapped in the browser did not match. Try again.")
+            else -> throw IllegalArgumentException("The request expired. Try again.")
+        }
+    }
+
+    /** Waits (up to [timeoutSeconds]) for any change on the account; returns the new counter. */
+    suspend fun waitForNews(after: Long, timeoutSeconds: Int): Long = io { api().waitForNews(after, timeoutSeconds) }
+
     /** A browser scanned before this phone was approved: approve it now (best effort). */
     private suspend fun approveRememberedScan() {
         val saved = settings.getString(K_SCAN_APPROVAL) ?: return
@@ -225,7 +292,9 @@ class CloudRepository @Inject constructor(
     }
 
     suspend fun pendingApprovals(): List<PendingApproval> = io {
-        api().pendingDevices().map { PendingApproval(it.id, it.name, CloudCrypto.safetyCode(it.encPublic, it.signPublic), it.encPublic, it.signPublic) }
+        api().pendingDevices().map {
+            PendingApproval(it.id, it.name, CloudCrypto.safetyCode(it.encPublic, it.signPublic), it.encPublic, it.signPublic, it.confirmRequested)
+        }
     }
 
     /** Call only after the user confirmed both screens show the same safety code. */

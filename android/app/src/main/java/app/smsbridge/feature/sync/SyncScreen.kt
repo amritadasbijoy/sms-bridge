@@ -24,6 +24,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -70,6 +71,7 @@ class SyncViewModel @Inject constructor(
     private val settings: AppSettingsRepository,
     private val scheduler: SyncScheduler,
     private val navigationRequests: app.smsbridge.ui.NavigationRequests,
+    @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context,
 ) : ViewModel() {
     val state: StateFlow<CloudState> = cloud.state
     val pending: StateFlow<Int> = pendingSync.pendingCount.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
@@ -149,6 +151,47 @@ class SyncViewModel @Inject constructor(
         _recoveryReminder.value = cloud.recoveryReminder()
     }
 
+    // ---- Number matching ----
+    private val _confirm = MutableStateFlow<app.smsbridge.data.cloud.ConfirmPrompt?>(null)
+    val confirm: StateFlow<app.smsbridge.data.cloud.ConfirmPrompt?> = _confirm.asStateFlow()
+
+    fun startConfirm(request: PendingApproval) = run { _confirm.value = cloud.startConfirm(request) }
+
+    /** [picked] null = "none of these" (declines). */
+    fun pickNumber(picked: Int?) = run {
+        val prompt = _confirm.value ?: return@run
+        _confirm.value = null
+        _info.value = if (cloud.finishConfirm(prompt, picked)) "Approved ${prompt.request.name}." else "Not approved: the numbers did not match. Ask again from the browser."
+        _approvals.value = cloud.pendingApprovals()
+    }
+
+    private val _connectWait = MutableStateFlow<app.smsbridge.data.cloud.ConnectWait?>(null)
+    val connectWait: StateFlow<app.smsbridge.data.cloud.ConnectWait?> = _connectWait.asStateFlow()
+
+    /** Connect without a QR code: the owner taps the number this phone shows in the browser. */
+    fun connectByNumber(server: String, username: String) = run {
+        val wait = cloud.requestConnect(server, username)
+        _connectWait.value = wait
+        viewModelScope.launch {
+            while (_connectWait.value == wait) {
+                kotlinx.coroutines.delay(2_000)
+                try {
+                    if (cloud.checkConnect(wait)) {
+                        _connectWait.value = null
+                        _info.value = "Connected."
+                    }
+                } catch (e: IllegalArgumentException) {
+                    _connectWait.value = null
+                    _error.value = e.message
+                } catch (e: IOException) {
+                    // keep waiting through brief network trouble
+                }
+            }
+        }
+    }
+
+    fun cancelConnectWait() { _connectWait.value = null }
+
     fun loadRecoveryReminder() = viewModelScope.launch { _recoveryReminder.value = cloud.recoveryReminder() }
     fun dismissRecoveryReminder() = viewModelScope.launch {
         cloud.dismissRecoveryReminder()
@@ -183,10 +226,27 @@ class SyncViewModel @Inject constructor(
         }
     }
 
-    // Last, so every property above is initialised: a pairing link opened on this phone acts like a scan.
+    // Last, so every property above is initialised: a pairing link opened on this phone acts like a scan,
+    // the approval notification opens the number prompt, and a connected phone keeps its connection.
     init {
         viewModelScope.launch {
             navigationRequests.pairLink.collect { if (it != null) navigationRequests.takePairLink()?.let(::onScanned) }
+        }
+        viewModelScope.launch {
+            navigationRequests.confirmDevice.collect { id ->
+                if (id == null) return@collect
+                navigationRequests.takeConfirmDevice()
+                run {
+                    val all = cloud.pendingApprovals()
+                    _approvals.value = all
+                    val request = all.firstOrNull { it.deviceId == id }
+                        ?: throw IllegalArgumentException("That browser is no longer waiting for approval.")
+                    _confirm.value = cloud.startConfirm(request)
+                }
+            }
+        }
+        viewModelScope.launch {
+            cloud.state.collect { if (it is CloudState.Ready) app.smsbridge.data.cloud.CloudConnectionService.start(appContext) }
         }
     }
 }
@@ -209,16 +269,24 @@ fun SyncScreen(viewModel: SyncViewModel = hiltViewModel()) {
         }
         error?.let { item { Text(it, color = MaterialTheme.colorScheme.error) } }
         info?.let { item { Text(it, color = MaterialTheme.colorScheme.primary) } }
+        item { ConfirmNumberDialog(viewModel) }
         when (val s = state) {
-            CloudState.NotConnected -> item {
-                val revoked by viewModel.wasRevoked.collectAsStateWithLifecycle()
-                val lastServer by viewModel.lastServer.collectAsStateWithLifecycle()
-                ConnectCard(busy, revoked, lastServer, viewModel::connect, viewModel::onScanned)
+            CloudState.NotConnected -> {
+                item {
+                    val revoked by viewModel.wasRevoked.collectAsStateWithLifecycle()
+                    val lastServer by viewModel.lastServer.collectAsStateWithLifecycle()
+                    ConnectCard(busy, revoked, lastServer, viewModel::connect, viewModel::onScanned)
+                }
+                item {
+                    val lastServer by viewModel.lastServer.collectAsStateWithLifecycle()
+                    ConnectByNumberCard(viewModel, busy, lastServer)
+                }
             }
             is CloudState.NeedsRecoverySetup -> item { RecoveryKeyCard(s.recoveryKey, busy, viewModel::confirmRecoverySaved, viewModel::confirmRecoveryLater) }
             is CloudState.WaitingForApproval -> item { WaitingCard(s, busy, viewModel) }
             is CloudState.Ready -> {
                 item { RecoveryReminderCard(viewModel) }
+                item { StayReachableCard() }
                 item { ConnectedCard(s, viewModel) }
                 item { ApprovalsCard(viewModel, busy) }
             }
@@ -270,6 +338,110 @@ private fun ConnectCard(busy: Boolean, wasRevoked: Boolean, lastServer: String, 
                 enabled = !busy && server.isNotBlank() && (code.isNotBlank() || server.trim().startsWith("smsbridge://")),
                 modifier = Modifier.padding(top = 8.dp),
             ) { Text("Connect") }
+        }
+    }
+}
+
+/** Connect without a camera: this phone shows a number, the owner taps it in the browser. */
+@Composable
+private fun ConnectByNumberCard(viewModel: SyncViewModel, busy: Boolean, lastServer: String) {
+    val wait by viewModel.connectWait.collectAsStateWithLifecycle()
+    var open by rememberSaveable { mutableStateOf(false) }
+    var server by rememberSaveable(lastServer) { mutableStateOf(lastServer) }
+    var username by rememberSaveable { mutableStateOf("") }
+    val w = wait
+    if (w != null) {
+        SectionCard("Confirm in your browser") {
+            Text("Sign in to your dashboard in a browser. It asks which number this phone shows. Tap:", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp))
+            Text("${w.number}", style = MaterialTheme.typography.displayLarge, fontFamily = FontFamily.Monospace, modifier = Modifier.padding(vertical = 12.dp))
+            Text("Waiting… this expires in 10 minutes.", style = MaterialTheme.typography.bodySmall)
+            TextButton(onClick = viewModel::cancelConnectWait) { Text("Cancel") }
+        }
+        return
+    }
+    if (!open) {
+        TextButton(onClick = { open = true }) { Text("No camera? Confirm with a number instead") }
+        return
+    }
+    SectionCard("Connect with a number") {
+        OutlinedTextField(
+            value = server, onValueChange = { server = it }, label = { Text("Server address") },
+            placeholder = { Text("https://sms.example.org") }, singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        )
+        OutlinedTextField(
+            value = username, onValueChange = { username = it }, label = { Text("Your username") }, singleLine = true,
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        )
+        Button(
+            onClick = { viewModel.connectByNumber(server, username) },
+            enabled = !busy && server.isNotBlank() && username.isNotBlank(),
+            modifier = Modifier.padding(top = 8.dp),
+        ) { Text("Continue") }
+    }
+}
+
+/** "Which number does the browser show?" Three choices; anything but the right one declines. */
+@Composable
+private fun ConfirmNumberDialog(viewModel: SyncViewModel) {
+    val prompt by viewModel.confirm.collectAsStateWithLifecycle()
+    val p = prompt ?: return
+    AlertDialog(
+        onDismissRequest = {},
+        title = { Text("Which number does ${p.request.name} show?") },
+        text = {
+            Column {
+                Text("Tap the number shown in the browser. If none matches, someone else may be trying to sign in.", style = MaterialTheme.typography.bodyMedium)
+                Row(Modifier.fillMaxWidth().padding(top = 16.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
+                    p.options.forEach { n ->
+                        Button(onClick = { viewModel.pickNumber(n) }) { Text("$n", style = MaterialTheme.typography.headlineSmall) }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = { viewModel.pickNumber(null) }) { Text("None of these") } },
+    )
+}
+
+/** Notifications and battery settings the background connection needs. Hidden once both are fine. */
+@Composable
+private fun StayReachableCard() {
+    val context = LocalContext.current
+    var refresh by remember { mutableStateOf(0) }
+    val lifecycle = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    DisposableEffect(lifecycle) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, e -> if (e == androidx.lifecycle.Lifecycle.Event.ON_RESUME) refresh++ }
+        lifecycle.lifecycle.addObserver(observer)
+        onDispose { lifecycle.lifecycle.removeObserver(observer) }
+    }
+    val notificationsOk = remember(refresh) { androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled() }
+    val batteryOk = remember(refresh) {
+        context.getSystemService(android.os.PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName)
+    }
+    val askNotifications = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
+    ) { refresh++ }
+    if (notificationsOk && batteryOk) return
+    SectionCard("Stay reachable") {
+        Text(
+            "So browsers can be confirmed and SMS arrive instantly even when SMS Bridge is closed:",
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+        if (!notificationsOk) {
+            Button(onClick = {
+                if (android.os.Build.VERSION.SDK_INT >= 33) askNotifications.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                else context.startActivity(android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName))
+            }, modifier = Modifier.padding(top = 8.dp)) { Text("Allow notifications") }
+        }
+        if (!batteryOk) {
+            OutlinedButton(onClick = {
+                @android.annotation.SuppressLint("BatteryLife")
+                val intent = android.content.Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, android.net.Uri.parse("package:${context.packageName}"))
+                runCatching { context.startActivity(intent) }
+            }, modifier = Modifier.padding(top = 8.dp)) { Text("Allow running in the background") }
         }
     }
 }
@@ -492,7 +664,12 @@ private fun ApprovalsCard(viewModel: SyncViewModel, busy: Boolean) {
             Column(Modifier.padding(top = 8.dp)) {
                 Text(request.name, style = MaterialTheme.typography.titleSmall)
                 Text("Safety code: ${request.safetyCode}", fontFamily = FontFamily.Monospace)
-                Button(onClick = { confirm = request.deviceId }, enabled = !busy, modifier = Modifier.padding(top = 4.dp)) { Text("Approve…") }
+                if (request.confirmRequested) {
+                    Button(onClick = { viewModel.startConfirm(request) }, enabled = !busy, modifier = Modifier.padding(top = 4.dp)) { Text("Confirm with a number") }
+                    OutlinedButton(onClick = { confirm = request.deviceId }, enabled = !busy) { Text("Compare codes instead…") }
+                } else {
+                    Button(onClick = { confirm = request.deviceId }, enabled = !busy, modifier = Modifier.padding(top = 4.dp)) { Text("Approve…") }
+                }
             }
         }
         OutlinedButton(onClick = viewModel::loadApprovals, enabled = !busy, modifier = Modifier.padding(top = 8.dp)) { Text("Refresh") }

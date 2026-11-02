@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, ApiError, type Me, type StoredEvent } from "./api";
 import { deviceSafetyCode, ensureDevice, fetchVaultKeys, forgetLocal } from "./browser-device";
+import { confirmNumber } from "./confirm";
 import { deviceFingerprint } from "./pair";
 import { base64ToBytes, decryptEvent, parseRecoveryKey, unlockVaultKey } from "./crypto";
 import { buildMessages, type DecryptedEvent, type EventPayload, type MessageStore } from "./messages";
@@ -14,7 +15,18 @@ type VaultState =
    * This browser waits for a phone to approve it (by scanning its QR code). [noApprovedPhone]: no phone
    * is connected and approved yet, so the QR also carries a pairing code to connect one.
    */
-  | { status: "approval"; safetyCode: string; deviceId: string; fingerprint: string; noApprovedPhone: boolean }
+  | {
+      status: "approval";
+      safetyCode: string;
+      deviceId: string;
+      fingerprint: string;
+      noApprovedPhone: boolean;
+      /** "Confirm on your phone" was pressed; [confirmNumber] is set once the phone opened the prompt. */
+      confirmRequested?: boolean;
+      confirmNumber?: number | null;
+      /** The phone declined (a different number was tapped). */
+      confirmDeclined?: boolean;
+    }
   | { status: "unlocking" }
   | { status: "loading"; loaded: number }
   | { status: "ready" };
@@ -28,6 +40,8 @@ interface Session {
   unlock: (recoveryKey: string) => Promise<boolean>;
   /** Opens the vault with this browser's own approved key (no recovery key). */
   openWithBrowser: () => Promise<void>;
+  /** Asks the account's phones to confirm this browser by number (no camera needed). */
+  requestConfirm: () => Promise<void>;
   /** Revokes this browser's approval and forgets its key. */
   forgetBrowser: () => Promise<void>;
   lock: () => void;
@@ -222,17 +236,30 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           // Keep the hint current (e.g. once the phone starts over, it can approve this browser).
           const info = await api.browserVault();
           const noApprovedPhone = !info.exists || info.approvedPhones === 0;
-          setVault((v) => (v.status === "approval" && v.noApprovedPhone !== noApprovedPhone ? { ...v, noApprovedPhone } : v));
+          // Number matching: the phone's challenge turns into the number this browser shows.
+          const number = result.challenge ? await confirmNumber(result.challenge, device.encPublic, device.signPublic) : null;
+          setVault((v) => {
+            if (v.status !== "approval") return v;
+            const declined = v.confirmRequested && v.confirmNumber != null && number == null;
+            return {
+              ...v,
+              noApprovedPhone,
+              confirmNumber: number,
+              confirmRequested: declined ? false : v.confirmRequested,
+              confirmDeclined: declined ? true : v.confirmDeclined,
+            };
+          });
+          if (stopped) return;
         }
       } catch {
         /* keep waiting; transient network errors are fine */
       }
-    }, 4000);
+    }, vault.status === "approval" && vault.confirmRequested ? 2000 : 4000);
     return () => {
       stopped = true;
       clearInterval(timer);
     };
-  }, [vault.status, me, load, openWithBrowser]);
+  }, [vault.status, vault.status === "approval" && vault.confirmRequested, me, load, openWithBrowser]);
 
   // Signed in with a locked vault: try this browser's own key once per sign-in.
   const autoTried = useRef<string | null>(null);
@@ -243,6 +270,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
     if (me === null) autoTried.current = null;
   }, [me, vault.status, openWithBrowser]);
+
+  const requestConfirm = useCallback(async () => {
+    if (vault.status !== "approval") return;
+    await api.requestConfirm(vault.deviceId);
+    setVault((v) => (v.status === "approval" ? { ...v, confirmRequested: true, confirmNumber: null, confirmDeclined: false } : v));
+  }, [vault]);
 
   const forgetBrowser = useCallback(async () => {
     if (!me) return;
@@ -318,8 +351,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [vault.status, lock]);
 
   const value = useMemo<Session>(
-    () => ({ me, refreshMe, signOut, vault, vaultError, unlock, openWithBrowser, forgetBrowser, lock, store, undecryptable, latestSequence, live }),
-    [me, refreshMe, signOut, vault, vaultError, unlock, openWithBrowser, forgetBrowser, lock, store, undecryptable, latestSequence, live],
+    () => ({ me, refreshMe, signOut, vault, vaultError, unlock, openWithBrowser, requestConfirm, forgetBrowser, lock, store, undecryptable, latestSequence, live }),
+    [me, refreshMe, signOut, vault, vaultError, unlock, openWithBrowser, requestConfirm, forgetBrowser, lock, store, undecryptable, latestSequence, live],
   );
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }

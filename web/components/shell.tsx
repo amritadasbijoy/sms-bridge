@@ -2,6 +2,7 @@ import Head from "next/head";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { useEffect, type ReactNode } from "react";
+import { ConnectRequests } from "@/components/connect-requests";
 import { Button } from "@/components/ui/button";
 import { useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
@@ -67,6 +68,7 @@ export function Shell({ title, children }: { title: string; children: ReactNode 
           ))}
         </nav>
       </header>
+      <ConnectRequests />
       <main className="mx-auto max-w-6xl px-4 py-6">
         <h1 className="mb-5 text-xl font-semibold">{title}</h1>
         {children}

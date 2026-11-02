@@ -89,7 +89,7 @@ export async function deviceSafetyCode(r: DeviceRecord): Promise<string> {
 
 export type DeviceKeysResult =
   | { state: "approved"; keys: Map<number, CryptoKey> }
-  | { state: "waiting" }
+  | { state: "waiting"; challenge: string | null }
   | { state: "revoked" };
 
 /** Fetches and unwraps this browser's vault keys. A revoked device is forgotten locally. */
@@ -104,7 +104,7 @@ export async function fetchVaultKeys(r: DeviceRecord): Promise<DeviceKeysResult>
     }
     throw e;
   }
-  if (!res.trusted || res.keys.length === 0) return { state: "waiting" };
+  if (!res.trusted || res.keys.length === 0) return { state: "waiting", challenge: res.challenge ?? null };
   const keys = new Map<number, CryptoKey>();
   const pub = base64ToBytes(r.encPublic);
   for (const k of res.keys) {

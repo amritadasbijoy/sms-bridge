@@ -22,6 +22,11 @@
         phones only. SMS Bridge makes no other network connections.
     -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Keeps the phone reachable for approval requests while the app is closed (shown as a notification). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
+    <!-- Lets the user exclude SMS Bridge from battery optimisation (asked once, from the Sync tab). -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- QR scanning for pairing (requested only when the user taps "Scan"). Camera is optional. -->
     <uses-feature
         android:name="android.hardware.camera"
@@ -90,6 +95,10 @@
             </intent-filter>
         </receiver>
 
+        <service
+            android:name=".data.cloud.CloudConnectionService"
+            android:exported="false"
+            android:foregroundServiceType="remoteMessaging" />
         <service
             android:name=".data.sms.HeadlessSmsSendService"
             android:exported="true"
