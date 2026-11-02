@@ -134,9 +134,12 @@ fun Application.module(config: Config, db: Db) {
     val twoFactor = TwoFactorService(db)
     val auth = AuthService(db, config, twoFactor)
     val devices = DeviceService(db)
-    val sync = SyncService(db)
-    val browsers = BrowserDeviceService(db)
+    val wake = Notices()
+    val sync = SyncService(db, wake)
+    val browsers = BrowserDeviceService(db, wake)
     val invites = InviteService(db)
+    val confirm = ConfirmService(db, wake)
+    val connects = ConnectRequestService(db, devices, wake)
     install(io.ktor.server.websocket.WebSockets) { pingPeriodMillis = 30_000 }
 
     routing {
@@ -154,6 +157,13 @@ fun Application.module(config: Config, db: Db) {
             vaultAndSyncRoutes(auth, sync)
             twoFactorRoutes(auth, twoFactor, db)
             browserAndInviteRoutes(auth, browsers, invites)
+            confirmRoutes(auth, sync, wake, confirm, connects)
+            rateLimit(AUTH_LIMIT) {
+                // An unconnected phone asks to join (no session, no code); rate limited like sign-in.
+                post("/connect-requests") {
+                    call.respond(HttpStatusCode.Created, connects.create(call.receive(), call.ip()))
+                }
+            }
         }
     }
 }

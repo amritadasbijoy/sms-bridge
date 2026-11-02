@@ -36,7 +36,11 @@ import kotlinx.serialization.Serializable
 @Serializable data class VaultInit(val recoveryKeys: List<WrappedKey>, val selfKeys: List<WrappedKey>)
 @Serializable data class VaultKeys(val currentVersion: Int, val keys: List<WrappedKey>)
 @Serializable data class SelfKeys(val selfKeys: List<WrappedKey>)
-@Serializable data class PendingDevice(val id: String, val name: String, val platform: String, val encPublicKey: String, val signPublicKey: String, val createdAt: String)
+@Serializable data class PendingDevice(
+    val id: String, val name: String, val platform: String, val encPublicKey: String, val signPublicKey: String, val createdAt: String,
+    /** The browser asked to be confirmed on a phone by number matching. */
+    val confirmRequested: Boolean = false,
+)
 @Serializable data class Approve(val keys: List<WrappedKey>)
 @Serializable data class UploadEvent(val eventId: String, val deviceSequence: Long, val keyVersion: Int, val ciphertext: String, val signature: String)
 @Serializable data class UploadBatch(val events: List<UploadEvent>)
@@ -74,7 +78,7 @@ data class DeviceContext(val deviceId: UUID, val userId: UUID, val trusted: Bool
 private const val MAX_BATCH = 500
 private const val MAX_CIPHERTEXT = 64 * 1024
 
-class SyncService(private val db: Db) {
+class SyncService(private val db: Db, private val wake: Notices = Notices()) {
     /** Content-free notifications: (userId, latest server sequence). */
     val notices = MutableSharedFlow<Pair<UUID, Long>>(extraBufferCapacity = 64)
 
@@ -132,6 +136,7 @@ class SyncService(private val db: Db) {
             audit(d.userId, d.deviceId, "vault_reset", "ok", ip)
         }
         notices.tryEmit(d.userId to 0L)
+        wake.bump(d.userId)
     }
 
     private fun java.sql.Connection.approvedDevices(userId: UUID): Int =
@@ -181,13 +186,18 @@ class SyncService(private val db: Db) {
         return db.tx {
             query(
                 """
-                SELECT id, name, platform, enc_public_key, sign_public_key, created_at FROM devices
+                SELECT id, name, platform, enc_public_key, sign_public_key, created_at, confirm_requested_at FROM devices
                 WHERE user_id = ? AND vault_trusted_at IS NULL AND revoked_at IS NULL
                   AND enc_public_key IS NOT NULL AND sign_public_key IS NOT NULL
                 ORDER BY created_at
                 """.trimIndent(),
                 d.userId,
-            ) { PendingDevice(it.uuid("id").toString(), it.getString("name"), it.getString("platform"), it.getString("enc_public_key"), it.getString("sign_public_key"), it.time("created_at").toString()) }
+            ) {
+                PendingDevice(
+                    it.uuid("id").toString(), it.getString("name"), it.getString("platform"), it.getString("enc_public_key"),
+                    it.getString("sign_public_key"), it.time("created_at").toString(), it.time("confirm_requested_at") != null,
+                )
+            }
         }
     }
 
@@ -202,9 +212,10 @@ class SyncService(private val db: Db) {
             val version = query("SELECT current_version FROM vaults WHERE user_id = ?", d.userId) { it.getInt(1) }.single()
             requireAllVersions(body.keys, version)
             body.keys.forEach { putKey(d.userId, it.keyVersion, target.toString(), it.wrappedKey, d.deviceId) }
-            update("UPDATE devices SET vault_trusted_at = now() WHERE id = ?", target)
+            update("UPDATE devices SET vault_trusted_at = now(), confirm_requested_at = NULL, confirm_salt = NULL WHERE id = ?", target)
             audit(d.userId, target, "vault_device_approved", "ok", ip)
         }
+        wake.bump(d.userId)
     }
 
     suspend fun upload(d: DeviceContext, batch: UploadBatch): UploadResult {
@@ -243,7 +254,7 @@ class SyncService(private val db: Db) {
                 Ack(e.eventId, row.second)
             }
         }
-        acks.maxOfOrNull { it.serverSequence }?.let { notices.tryEmit(d.userId to it) }
+        acks.maxOfOrNull { it.serverSequence }?.let { notices.tryEmit(d.userId to it); wake.bump(d.userId) }
         return UploadResult(acks)
     }
 
