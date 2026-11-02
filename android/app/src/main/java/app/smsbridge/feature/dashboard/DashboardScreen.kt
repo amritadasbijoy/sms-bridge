@@ -51,6 +51,8 @@ fun DashboardScreen(
             }
         }
 
+        item { app.smsbridge.feature.update.UpdateBanner() }
+
         if (!permissions.hasTelephony) {
             item {
                 SectionCard("No mobile network on this device") {

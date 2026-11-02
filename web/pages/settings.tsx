@@ -136,27 +136,47 @@ function Invites() {
       <CardHeader>
         <CardTitle>Invite someone</CardTitle>
         <CardDescription>
-          Sign-up is closed. An invite code lets one person create their own account (with their own phones and messages,
+          Sign-up is closed. An invite link lets one person create their own account (with their own phones and messages,
           separate from yours). Codes work once and expire after 7 days.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
-        {code && (
-          <div className="rounded-md border bg-muted px-4 py-3">
-            <p className="font-mono text-2xl tracking-widest">{code.code}</p>
-            <p className="text-xs text-muted-foreground">
-              Send this with the address {typeof window !== "undefined" ? window.location.origin : ""}. They choose
-              &quot;I have an invite code&quot; on the sign-in page. Expires {formatDateTime(code.expiresAt)}.
-            </p>
-          </div>
-        )}
+        {code && <InviteLink code={code.code} expiresAt={code.expiresAt} />}
         {error && <Alert tone="error">{error}</Alert>}
-        <Button onClick={create}>{code ? "Create another" : "Create invite code"}</Button>
+        <Button onClick={create}>{code ? "Create another" : "Create invite link"}</Button>
         <p className="text-xs text-muted-foreground">
           {list.length === 0 ? "No invites yet." : `${list.filter((i) => i.used).length} used · ${open} waiting`}
         </p>
       </CardContent>
     </Card>
+  );
+}
+
+/** The invite as a link to send; opening it shows account creation with the code filled in. */
+function InviteLink({ code, expiresAt }: { code: string; expiresAt: string }) {
+  const link = `${typeof window !== "undefined" ? window.location.origin : ""}/login/?invite=${encodeURIComponent(code)}`;
+  const [copied, setCopied] = useState(false);
+  const canShare = typeof navigator !== "undefined" && typeof navigator.share === "function";
+  return (
+    <div className="space-y-2 rounded-md border bg-muted px-4 py-3">
+      <p className="break-all font-mono text-sm">{link}</p>
+      <div className="flex flex-wrap gap-2">
+        <Button
+          size="sm"
+          onClick={() => void navigator.clipboard.writeText(link).then(() => setCopied(true), () => setCopied(false))}
+        >
+          {copied ? "Copied" : "Copy link"}
+        </Button>
+        {canShare && (
+          <Button size="sm" variant="outline" onClick={() => void navigator.share({ title: "SMS Bridge invite", url: link }).catch(() => {})}>
+            Share…
+          </Button>
+        )}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Works once, until {formatDateTime(expiresAt)}. Code if they need it: <span className="font-mono">{code}</span>
+      </p>
+    </div>
   );
 }
 

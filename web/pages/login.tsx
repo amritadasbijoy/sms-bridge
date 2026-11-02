@@ -28,6 +28,15 @@ export default function Login() {
   useEffect(() => {
     api.status().then((s) => setRegistrationOpen(s.registrationOpen), () => {});
   }, []);
+  // An invite link (…/login/?invite=XXXXX-XXXXX) opens account creation with the code filled in.
+  useEffect(() => {
+    if (!router.isReady) return;
+    const code = typeof router.query.invite === "string" ? router.query.invite : "";
+    if (code) {
+      setInvite(code);
+      setCreating(true);
+    }
+  }, [router.isReady, router.query.invite]);
   useEffect(() => {
     if (needCode) codeRef.current?.focus();
   }, [needCode]);

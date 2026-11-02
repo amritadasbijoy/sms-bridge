@@ -56,6 +56,16 @@ class DatabaseMigrationTest {
     }
 
     @Test
+    fun migrate2To3AddsTheRemoteListAndKeepsMessages() {
+        helper.createDatabase(dbName, 1).use { db -> insertV1(db, "m1", "+15550100") }
+        helper.runMigrationsAndValidate(dbName, 2, true, SmsBridgeMigrations.MIGRATION_1_2).close()
+        helper.runMigrationsAndValidate(dbName, 3, true, SmsBridgeMigrations.MIGRATION_2_3).use { db ->
+            db.query("SELECT COUNT(*) FROM sms_messages").use { c -> c.moveToFirst(); assertEquals(1, c.getInt(0)) }
+            db.query("SELECT COUNT(*) FROM remote_messages").use { c -> c.moveToFirst(); assertEquals(0, c.getInt(0)) }
+        }
+    }
+
+    @Test
     fun allVersionsOpenWithRoomWithoutDataLoss() {
         helper.createDatabase(dbName, 1).use { db -> insertV1(db, "m1", "+15550100") }
 

@@ -15,6 +15,7 @@ import app.smsbridge.core.database.dao.SyncCheckpointDao
 import app.smsbridge.core.database.dao.SyncOperationDao
 import app.smsbridge.core.database.dao.TransferSessionDao
 import app.smsbridge.core.database.entity.AppSettingEntity
+import app.smsbridge.core.database.entity.RemoteMessageEntity
 import app.smsbridge.core.database.entity.BackupHistoryEntity
 import app.smsbridge.core.database.entity.DeviceEntity
 import app.smsbridge.core.database.entity.SmsMessageEntity
@@ -37,6 +38,7 @@ import javax.inject.Singleton
         BackupHistoryEntity::class,
         TransferSessionEntity::class,
         AppSettingEntity::class,
+        RemoteMessageEntity::class,
     ],
     version = SmsBridgeDatabase.VERSION,
     exportSchema = true,
@@ -49,10 +51,11 @@ abstract class SmsBridgeDatabase : RoomDatabase() {
     abstract fun appSettingDao(): AppSettingDao
     abstract fun backupHistoryDao(): BackupHistoryDao
     abstract fun transferSessionDao(): TransferSessionDao
+    abstract fun remoteMessageDao(): app.smsbridge.core.database.dao.RemoteMessageDao
 
     companion object {
         const val NAME = "sms_bridge.db"
-        const val VERSION = 2
+        const val VERSION = 3
     }
 }
 
@@ -84,7 +87,18 @@ object SmsBridgeMigrations {
         }
     }
 
-    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2)
+    /** v3: messages from the account's other phones (listener mode); a new table, nothing existing changes. */
+    val MIGRATION_2_3 = object : Migration(2, 3) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `remote_messages` (`key` TEXT NOT NULL, `device_id` TEXT NOT NULL, `address` TEXT, " +
+                    "`body` TEXT NOT NULL, `date` INTEGER NOT NULL, `box` TEXT NOT NULL, `server_sequence` INTEGER NOT NULL, PRIMARY KEY(`key`))",
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_remote_messages_date` ON `remote_messages` (`date`)")
+        }
+    }
+
+    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
 }
 
 @Module

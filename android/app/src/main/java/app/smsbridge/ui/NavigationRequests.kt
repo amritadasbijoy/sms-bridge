@@ -15,6 +15,8 @@ sealed interface NavRequest {
     data class Compose(val recipient: String?, val body: String?) : NavRequest
     /** A dashboard pairing link opened on the phone (smsbridge://pair?...): handled by the Sync screen. */
     data object OpenSync : NavRequest
+    /** Listener mode notification: the messages from the account's other phones. */
+    data object OpenRemote : NavRequest
 }
 
 /** Hands navigation requests from Activity intents (notifications, sms: links) to the Compose nav graph. */
@@ -49,6 +51,7 @@ class NavigationRequests @Inject constructor() {
                     _confirmDevice.value = it
                     NavRequest.OpenSync
                 }
+            app.smsbridge.data.cloud.CloudConnectionService.ACTION_OPEN_REMOTE -> NavRequest.OpenRemote
             Intent.ACTION_VIEW -> intent.dataString?.takeIf { it.startsWith("smsbridge://pair?") }?.let {
                 _pairLink.value = it
                 NavRequest.OpenSync
@@ -69,6 +72,7 @@ object Routes {
     const val TRANSFER = "transfer"
     const val SYNC = "sync"
     const val SETTINGS = "settings"
+    const val REMOTE = "remote"
     const val THREAD = "thread?key={key}"
     const val COMPOSE = "compose?to={to}&body={body}"
 

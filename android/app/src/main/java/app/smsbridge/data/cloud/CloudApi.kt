@@ -12,8 +12,9 @@ import org.json.JSONObject
 class CloudHttpException(val status: Int, val code: String, message: String) : IOException(message)
 
 data class WrappedKeyDto(val keyVersion: Int, val wrappedKey: ByteArray)
-data class VaultStatusDto(val exists: Boolean, val currentVersion: Int?, val trusted: Boolean, val approvedDevices: Int)
-data class PendingDeviceDto(val id: String, val name: String, val encPublic: ByteArray, val signPublic: ByteArray, val confirmRequested: Boolean = false)
+data class VaultStatusDto(val exists: Boolean, val currentVersion: Int?, val trusted: Boolean, val approvedDevices: Int, val challenge: ByteArray? = null)
+data class PendingDeviceDto(val id: String, val name: String, val encPublic: ByteArray, val signPublic: ByteArray, val confirmRequested: Boolean = false, val platform: String = "android")
+data class StoredEventDto(val eventId: String, val deviceId: String, val deviceSequence: Long, val serverSequence: Long, val keyVersion: Int, val ciphertext: ByteArray)
 data class ConnectRequestDto(val requestId: String, val secret: String, val number: Int, val expiresAt: String)
 data class UploadEventDto(val eventId: String, val deviceSequence: Long, val keyVersion: Int, val ciphertext: ByteArray, val signature: ByteArray)
 
@@ -36,6 +37,7 @@ class CloudApi(baseUrl: String, private val token: String? = null) {
         VaultStatusDto(
             it.getBoolean("exists"), if (it.isNull("currentVersion")) null else it.getInt("currentVersion"), it.getBoolean("deviceTrusted"),
             it.optInt("approvedDevices", -1),
+            it.optString("challenge").takeIf { c -> c.isNotEmpty() && c != "null" }?.let(::unb64),
         )
     }
 
@@ -62,7 +64,7 @@ class CloudApi(baseUrl: String, private val token: String? = null) {
             val o = array.getJSONObject(i)
             PendingDeviceDto(
                 o.getString("id"), o.getString("name"), unb64(o.getString("encPublicKey")), unb64(o.getString("signPublicKey")),
-                o.optBoolean("confirmRequested", false),
+                o.optBoolean("confirmRequested", false), o.optString("platform", "android"),
             )
         }
     }
@@ -71,9 +73,32 @@ class CloudApi(baseUrl: String, private val token: String? = null) {
         call("POST", "/api/v1/vault/requests/$deviceId/approve", JSONObject().put("keys", keys(keys)))
     }
 
+    /** A page of the account's encrypted events after [after] (approved devices only). */
+    fun events(after: Long, limit: Int): List<StoredEventDto> {
+        val array = call("GET", "/api/v1/sync/events?after=$after&limit=$limit").getJSONArray("events")
+        return List(array.length()) { i ->
+            val o = array.getJSONObject(i)
+            StoredEventDto(
+                o.getString("eventId"), o.getString("deviceId"), o.getLong("deviceSequence"), o.getLong("serverSequence"),
+                o.getInt("keyVersion"), unb64(o.getString("ciphertext")),
+            )
+        }
+    }
+
+    /** Device id → name for the account (approved devices only). */
+    fun accountDevices(): Map<String, String> {
+        val array = callArray("GET", "/api/v1/vault/devices")
+        return (0 until array.length()).associate { i -> array.getJSONObject(i).let { it.getString("id") to it.getString("name") } }
+    }
+
     /** Number matching: the random challenge the browser turns into its number. */
     fun setChallenge(deviceId: String, salt: ByteArray) {
         call("POST", "/api/v1/vault/requests/$deviceId/challenge", JSONObject().put("salt", b64(salt)))
+    }
+
+    /** This waiting phone asks the approved phones to confirm it by number. */
+    fun requestConfirm() {
+        call("POST", "/api/v1/vault/confirm", JSONObject())
     }
 
     fun decline(deviceId: String) {

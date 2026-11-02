@@ -120,6 +120,27 @@ class ConfirmTest {
     }
 
     @Test
+    fun aSecondPhoneIsConfirmedByNumberToo() = api { owner ->
+        val first = owner.trustedPhone()
+        val code = obj(owner.postJson("/api/v1/devices/pairing-codes", "{}"))["code"]!!.jsonPrimitive.content
+        val id = UUID.randomUUID().toString()
+        val second = obj(owner.postJson("/api/v1/devices/register", """{"pairingCode":"$code","deviceId":"$id","name":"Phone 2","platform":"android","encPublicKey":"${key()}","signPublicKey":"${key()}"}"""))["deviceToken"]!!.jsonPrimitive.content
+        assertEquals(HttpStatusCode.NoContent, owner.postJson("/api/v1/vault/confirm", "{}", bearer = second).status)
+        assertEquals(HttpStatusCode.Conflict, owner.postJson("/api/v1/vault/confirm", "{}", bearer = first).status) // already approved
+        val pending = Json.parseToJsonElement(owner.get("/api/v1/vault/requests") { header(HttpHeaders.Authorization, "Bearer $first") }.bodyAsText()).jsonArray
+        assertEquals("true", pending.single().jsonObject["confirmRequested"]!!.jsonPrimitive.content)
+        val salt = b64.encodeToString(ByteArray(16) { 3 })
+        owner.postJson("/api/v1/vault/requests/$id/challenge", """{"salt":"$salt"}""", bearer = first)
+        assertEquals(salt, obj(owner.get("/api/v1/vault") { header(HttpHeaders.Authorization, "Bearer $second") })["challenge"]!!.jsonPrimitive.content)
+        assertEquals(HttpStatusCode.NoContent, owner.postJson("/api/v1/vault/requests/$id/approve", """{"keys":[{"keyVersion":1,"wrappedKey":"${wrapped()}"}]}""", bearer = first).status)
+        assertEquals("true", obj(owner.get("/api/v1/vault") { header(HttpHeaders.Authorization, "Bearer $second") })["deviceTrusted"]!!.jsonPrimitive.content)
+
+        // Approved phones can see the names of the account's devices (listener mode labels).
+        val names = Json.parseToJsonElement(owner.get("/api/v1/vault/devices") { header(HttpHeaders.Authorization, "Bearer $second") }.bodyAsText()).jsonArray
+        assertEquals(setOf("Phone", "Phone 2"), names.map { it.jsonObject["name"]!!.jsonPrimitive.content }.toSet())
+    }
+
+    @Test
     fun aPhoneJoinsWhenTheOwnerTapsTheRightNumber() = api { owner ->
         val phone = createClient { }
         val created = obj(phone.postJson("/api/v1/connect-requests", """{"username":"OWNER","name":"Galaxy"}"""))
