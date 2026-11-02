@@ -124,6 +124,9 @@ Known limitations:
 | Browser approval | A browser registers its own X25519 key (generated **non-extractable**, kept in IndexedDB per account) as a `web` device. A trusted phone compares the 6-digit safety code and wraps the vault key for it with HPKE, bound to the browser's device id and key version. Later visits unlock automatically. Revoking it (Devices page or "Forget this browser") stops it at once; at most 5 browsers may wait for approval. |
 | Accounts | Registration is closed after the first account; one-time invite codes (7 days, hashed, consumed in the registration transaction) admit one person each. Each account has its own vault. |
 
+| Phone sign-in | A browser creates its own keys and a sign-in request (5 minutes). A connected, approved phone scans its QR code, verifies the key fingerprint and approves; the browser gets a session (handed out once) and is already an approved device. The username fallback notifies that account's phones and needs the matching number (unknown usernames get an identical answer). Phone approval also bypasses TOTP: the phone is the second factor. |
+| Accounts without passwords | "Get started" creates one under the same registration rules (first account, open registration or invite); password sign-in is impossible until a password is added in Settings. Losing every phone without a password or recovery key means losing access. |
+
 Trade-off: an approved browser opens messages with only the account sign-in, so treat it like an
 unlocked phone (forget it on shared computers). The recovery key remains as a fallback. Ed25519 event signatures are verified by the server, not yet in the browser (they only
 distinguish devices that already hold the vault key).
