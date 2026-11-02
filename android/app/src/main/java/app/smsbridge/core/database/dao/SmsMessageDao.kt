@@ -123,15 +123,19 @@ interface SmsMessageDao {
     @Query("SELECT id FROM sms_messages WHERE rowid > :afterRowId AND rowid <= :maxRowId ORDER BY rowid LIMIT :limit")
     suspend fun idPage(afterRowId: Long, maxRowId: Long, limit: Int): List<String>
 
-    /** Like [idPage], limited to messages dated at or after [since] (or before it, with [before] = true). */
+    /**
+     * Messages dated in [from, until), newest first, in pages: pass the last row of the previous page
+     * as the cursor (start with Long.MAX_VALUE for both). Keyset paging stays fast on large archives.
+     */
     @Query(
         """
-        SELECT id FROM sms_messages WHERE rowid > :afterRowId AND rowid <= :maxRowId
-          AND ((:before = 0 AND date >= :since) OR (:before = 1 AND date < :since))
-        ORDER BY rowid LIMIT :limit
+        SELECT id, date, rowid AS rowId FROM sms_messages
+        WHERE rowid <= :maxRowId AND date >= :from AND date < :until
+          AND (date < :cursorDate OR (date = :cursorDate AND rowid < :cursorRowId))
+        ORDER BY date DESC, rowid DESC LIMIT :limit
         """,
     )
-    suspend fun idPageByDate(afterRowId: Long, maxRowId: Long, since: Long, before: Boolean, limit: Int): List<String>
+    suspend fun newestFirstPage(maxRowId: Long, from: Long, until: Long, cursorDate: Long, cursorRowId: Long, limit: Int): List<SnapshotRow>
 
     @Query("SELECT rowid FROM sms_messages WHERE id = :id")
     suspend fun rowIdOf(id: String): Long?
@@ -163,3 +167,6 @@ interface BackupHistoryDao {
     @Query("UPDATE backup_history SET status = 'INTERRUPTED' WHERE status = 'RUNNING' AND id NOT IN (:activeIds)")
     suspend fun markInterrupted(activeIds: List<String>): Int
 }
+
+/** One row of a newest-first snapshot page: the message id plus its paging cursor. */
+data class SnapshotRow(val id: String, val date: Long, val rowId: Long)

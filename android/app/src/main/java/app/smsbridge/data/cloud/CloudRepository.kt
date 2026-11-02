@@ -267,25 +267,32 @@ class CloudRepository @Inject constructor(
         queued
     }
 
-    /** Queues one SMS_IMPORTED event per archived message dated from [since] (or before it), in pages. */
+    /**
+     * Queues one SMS_IMPORTED event per archived message dated from [since] (or, with [before],
+     * older than it), newest first: the queue uploads in this order, so recent messages arrive first.
+     */
     private suspend fun enqueueSnapshot(since: Long, before: Boolean): Int {
         val dao = db.smsMessageDao()
         val max = dao.maxRowId() ?: return 0
-        var after = 0L
+        val from = if (before) Long.MIN_VALUE else since
+        val until = if (before) since else Long.MAX_VALUE
+        var cursorDate = Long.MAX_VALUE
+        var cursorRow = Long.MAX_VALUE
         var total = 0
         while (true) {
-            val ids = dao.idPageByDate(after, max, since, before, 500)
-            if (ids.isEmpty()) break
+            val page = dao.newestFirstPage(max, from, until, cursorDate, cursorRow, 500)
+            if (page.isEmpty()) break
             db.withTransaction {
                 val now = time.nowMillis()
-                ids.forEach { id ->
+                page.forEach { row ->
                     db.syncOperationDao().insert(
-                        SyncOperationEntity(UUID.randomUUID().toString(), id, SyncEventType.SMS_IMPORTED, settings.nextDeviceSequence(), SyncState.PENDING, 0, now, now, null),
+                        SyncOperationEntity(UUID.randomUUID().toString(), row.id, SyncEventType.SMS_IMPORTED, settings.nextDeviceSequence(), SyncState.PENDING, 0, now, now, null),
                     )
                 }
             }
-            after = dao.rowIdOf(ids.last()) ?: break
-            total += ids.size
+            cursorDate = page.last().date
+            cursorRow = page.last().rowId
+            total += page.size
         }
         return total
     }
@@ -327,8 +334,8 @@ class CloudRepository @Inject constructor(
         const val K_HISTORY_FROM = "cloud.history_from"
         const val K_FULL_HISTORY = "cloud.full_history"
 
-        /** The first upload covers the last 4 days; the rest of the archive only on request. */
-        const val INITIAL_SYNC_WINDOW_MS = 4L * 24 * 60 * 60 * 1000
+        /** The first upload covers the latest day; the rest of the archive only on request. */
+        const val INITIAL_SYNC_WINDOW_MS = 24L * 60 * 60 * 1000
         // Outside PREFIX on purpose: they survive a disconnect.
         const val K_REVOKED_NOTICE = "cloudnotice.revoked"
         const val K_LAST_SERVER = "cloudnotice.last_server"

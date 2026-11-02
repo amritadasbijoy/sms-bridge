@@ -54,6 +54,34 @@ class SmsRepositoryTest {
     private suspend fun pending() = pendingSync.nextBatch(10_000)
 
     @Test
+    fun snapshotPagesRunNewestFirstWithinTheirWindow() = runBlocking {
+        (1L..1_200L).forEach { source.put(Synthetic.providerSms(it)) }
+        repository.reconcileFromProvider(ScanMode.FULL, emitSyncEvents = false)
+        val dates = dao.newestFirstPage(Long.MAX_VALUE, Long.MIN_VALUE, Long.MAX_VALUE, Long.MAX_VALUE, Long.MAX_VALUE, 2_000).map { it.date }
+        val split = dates[dates.size / 3]
+
+        fun pages(from: Long, until: Long) = runBlocking {
+            val out = mutableListOf<app.smsbridge.core.database.dao.SnapshotRow>()
+            var cursor = Long.MAX_VALUE to Long.MAX_VALUE
+            while (true) {
+                val page = dao.newestFirstPage(Long.MAX_VALUE, from, until, cursor.first, cursor.second, 100)
+                if (page.isEmpty()) break
+                out += page
+                cursor = page.last().date to page.last().rowId
+            }
+            out
+        }
+        val recent = pages(split, Long.MAX_VALUE)
+        val older = pages(Long.MIN_VALUE, split)
+        // Together exactly the archive, no overlap; each part newest first, across page boundaries.
+        assertEquals(1_200, recent.size + older.size)
+        assertEquals(1_200, (recent + older).map { it.id }.toSet().size)
+        assertTrue(recent.all { it.date >= split } && older.all { it.date < split })
+        val all = (recent + older).map { it.date }
+        assertEquals(all.sortedDescending(), all)
+    }
+
+    @Test
     fun initialImportOf10kMessagesIsIdempotentAndQueuesNoEvents() = runBlocking {
         (1L..10_000L).forEach { source.put(Synthetic.providerSms(it)) }
 
