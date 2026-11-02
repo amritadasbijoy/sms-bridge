@@ -142,6 +142,7 @@ fun Application.module(config: Config, db: Db) {
     val confirm = ConfirmService(db, wake)
     val connects = ConnectRequestService(db, devices, wake)
     val logins = LoginRequestService(db, auth, wake)
+    val releases = ReleaseService(db, wake)
     install(io.ktor.server.websocket.WebSockets) { pingPeriodMillis = 30_000 }
 
     routing {
@@ -159,7 +160,8 @@ fun Application.module(config: Config, db: Db) {
             vaultAndSyncRoutes(auth, sync)
             twoFactorRoutes(auth, twoFactor, db)
             browserAndInviteRoutes(auth, browsers, invites)
-            confirmRoutes(auth, sync, wake, confirm, connects)
+            confirmRoutes(auth, sync, wake, confirm, connects, releases)
+            releaseRoutes(config, releases)
             loginRoutes(sync, logins) { token -> setSessionCookie(token, config) }
             rateLimit(AUTH_LIMIT) {
                 // An unconnected phone asks to join (no session, no code); rate limited like sign-in.

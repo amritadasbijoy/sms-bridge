@@ -28,6 +28,8 @@ data class Config(
     val allowRegistration: Boolean,
     /** Honour X-Forwarded-For/Proto only when running behind our own reverse proxy. */
     val trustProxy: Boolean,
+    /** Lets the operator publish app releases (tools/publish-release.sh). Unset = publishing disabled. */
+    val adminToken: String? = null,
 ) {
     companion object {
         fun fromEnv(env: Map<String, String> = System.getenv()) = Config(
@@ -38,6 +40,7 @@ data class Config(
             cookieSecure = env["SMSBRIDGE_COOKIE_SECURE"]?.toBooleanStrict() ?: true,
             allowRegistration = env["SMSBRIDGE_ALLOW_REGISTRATION"]?.toBooleanStrict() ?: false,
             trustProxy = env["SMSBRIDGE_TRUST_PROXY"]?.toBooleanStrict() ?: false,
+            adminToken = env["SMSBRIDGE_ADMIN_TOKEN"]?.takeIf { it.length >= 32 },
         )
     }
 }

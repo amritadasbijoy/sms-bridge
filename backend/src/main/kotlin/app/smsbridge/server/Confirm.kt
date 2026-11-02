@@ -45,7 +45,7 @@ class Notices {
     }
 }
 
-@Serializable data class NoticeState(val counter: Long)
+@Serializable data class NoticeState(val counter: Long, val appVersion: Int = 0)
 
 // ---- Browser confirmed by number ----------------------------------------------------------------
 
@@ -195,13 +195,13 @@ class ConnectRequestService(private val db: Db, private val devices: DeviceServi
 
 const val REQUEST_SECRET_HEADER = "X-Request-Secret"
 
-fun Route.confirmRoutes(auth: AuthService, sync: SyncService, notices: Notices, confirm: ConfirmService, connects: ConnectRequestService) {
+fun Route.confirmRoutes(auth: AuthService, sync: SyncService, notices: Notices, confirm: ConfirmService, connects: ConnectRequestService, releases: ReleaseService) {
     // A phone (bearer) or a signed-in browser waits here for "something changed".
     get("/notices/wait") {
         val userId = if (call.request.header(io.ktor.http.HttpHeaders.Authorization) != null) sync.device(call).userId else auth.requireUser(call).first
         val after = call.request.queryParameters["after"]?.toLongOrNull() ?: -1L
         val timeout = (call.request.queryParameters["timeout"]?.toLongOrNull() ?: 45L).coerceIn(1, 55) * 1000
-        call.respond(NoticeState(notices.waitPast(userId, after, timeout)))
+        call.respond(NoticeState(notices.waitPast(userId, after, timeout), releases.latestCode()))
     }
     post("/browser/devices/{id}/confirm") {
         val user = auth.requireUser(call)

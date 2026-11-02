@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -19,6 +21,22 @@ android {
         vectorDrawables.useSupportLibrary = true
     }
 
+    // The release key lives outside the repository: ~/.smsbridge/keystore.properties
+    // (or the file named by SMSBRIDGE_KEYSTORE_PROPERTIES). Without it, release builds stay unsigned.
+    val keystoreFile = (System.getenv("SMSBRIDGE_KEYSTORE_PROPERTIES") ?: "${System.getProperty("user.home")}/.smsbridge/keystore.properties")
+        .let { file(it) }
+    val releaseSigning = if (keystoreFile.exists()) {
+        val props = Properties().apply { keystoreFile.inputStream().use { load(it) } }
+        signingConfigs.create("release") {
+            storeFile = file(props.getProperty("storeFile"))
+            storePassword = props.getProperty("storePassword")
+            keyAlias = props.getProperty("keyAlias")
+            keyPassword = props.getProperty("keyPassword")
+        }
+    } else {
+        null
+    }
+
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
@@ -27,7 +45,8 @@ android {
         release {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // Signing is configured outside the repository (see docs/development.md).
+            // Signed only where the key exists (see docs/development.md); never committed.
+            releaseSigning?.let { signingConfig = it }
         }
     }
 
