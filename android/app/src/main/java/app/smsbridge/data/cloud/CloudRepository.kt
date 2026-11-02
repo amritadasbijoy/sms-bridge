@@ -127,14 +127,16 @@ class CloudRepository @Inject constructor(
         settings.putString(K_SIGN_PUBLIC, b64(keys.signPublic))
 
         val status = api().vaultStatus()
+        rememberCanStartOver(status)
+        AppLog.i(TAG, "registered with server; vault exists=${status.exists}")
         if (!status.exists) {
-            // First phone: create VK v1 locally; nothing goes to the server until the recovery key is saved.
+            // First phone: create the vault at once. The recovery key is made and kept on this phone
+            // (viewable later in Sync) but never put in the user's way.
             putSecret(vkKey(1), CloudCrypto.newVaultKey())
             settings.putString(K_VK_CURRENT, "1")
             putSecret(K_PENDING_RECOVERY, CloudCrypto.newRecoveryKey())
+            return@io runCatching { confirmRecoverySaved(remindLater = true) }.getOrElse { refresh() }
         }
-        rememberCanStartOver(status)
-        AppLog.i(TAG, "registered with server; vault exists=${status.exists}")
         refresh()
     }
 
@@ -444,7 +446,8 @@ class CloudRepository @Inject constructor(
         settings.deletePrefix(K_SNAPSHOT_DONE)
         settings.deletePrefix(K_CAN_START_OVER)
         AppLog.i(TAG, "starting over with a new vault")
-        refresh()
+        // No recovery-key screen: the new key is kept on this phone, viewable later in Sync.
+        runCatching { confirmRecoverySaved(remindLater = true) }.getOrElse { refresh() }
     }
 
     private suspend fun rememberCanStartOver(status: VaultStatusDto) {

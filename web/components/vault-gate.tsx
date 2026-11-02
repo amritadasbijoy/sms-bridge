@@ -72,17 +72,17 @@ export function UnlockCard() {
             </Button>
           )}
           <details className="text-sm">
-            <summary className="cursor-pointer text-muted-foreground">Compare 6-digit codes instead</summary>
-            <div className="mt-2 space-y-2">
-              <p className="text-center font-mono text-2xl tracking-widest">{vault.safetyCode}</p>
-              <p className="text-muted-foreground">
-                On a connected phone: Sync → Devices waiting for approval → Refresh → Approve…, only if it shows the same code.
-              </p>
+            <summary className="cursor-pointer text-muted-foreground">More options</summary>
+            <div className="mt-2 space-y-3">
+              <div>
+                <p className="text-muted-foreground">Compare codes: approve on a connected phone (Sync → Devices waiting for approval) only if it shows</p>
+                <p className="text-center font-mono text-2xl tracking-widest">{vault.safetyCode}</p>
+              </div>
+              <button className="text-primary underline-offset-4 hover:underline" onClick={() => setUseRecovery(true)}>
+                I have a recovery key
+              </button>
             </div>
           </details>
-          <button className="text-sm text-primary underline-offset-4 hover:underline" onClick={() => setUseRecovery(true)}>
-            Use the recovery key instead
-          </button>
         </CardContent>
       </Card>
     );
@@ -105,11 +105,12 @@ export function UnlockCard() {
         <Button onClick={() => void openWithBrowser()} disabled={vault.status !== "locked"}>
           Open messages
         </Button>
-        <div>
-          <button className="text-sm text-primary underline-offset-4 hover:underline" onClick={() => setUseRecovery(true)}>
-            Use the recovery key instead
+        <details className="text-sm">
+          <summary className="cursor-pointer text-muted-foreground">More options</summary>
+          <button className="mt-2 text-primary underline-offset-4 hover:underline" onClick={() => setUseRecovery(true)}>
+            I have a recovery key
           </button>
-        </div>
+        </details>
       </CardContent>
     </Card>
   );

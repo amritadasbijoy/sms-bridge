@@ -325,11 +325,11 @@ fun SyncScreen(viewModel: SyncViewModel = hiltViewModel(), onOpenRemote: () -> U
             is CloudState.NeedsRecoverySetup -> item { RecoveryKeyCard(s.recoveryKey, busy, viewModel::confirmRecoverySaved, viewModel::confirmRecoveryLater) }
             is CloudState.WaitingForApproval -> item { WaitingCard(s, busy, viewModel) }
             is CloudState.Ready -> {
-                item { RecoveryReminderCard(viewModel) }
                 item { StayReachableCard() }
                 item { ConnectedCard(s, viewModel) }
                 item { ListenCard(viewModel, onOpenRemote) }
                 item { ApprovalsCard(viewModel, busy) }
+                item { RecoveryReminderCard(viewModel) }
             }
         }
     }
@@ -527,25 +527,28 @@ private fun rememberQrScanner(onResult: (String) -> Unit): (String) -> Unit {
     }
 }
 
-/** Shown until the user saves a recovery key they postponed. */
+/** The recovery key, out of the way: a small link that shows it only when asked for. */
 @Composable
 private fun RecoveryReminderCard(viewModel: SyncViewModel) {
     val key by viewModel.recoveryReminder.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { viewModel.loadRecoveryReminder() }
     val recovery = key ?: return
     var show by rememberSaveable { mutableStateOf(false) }
-    SectionCard("Save your recovery key") {
+    if (!show) {
+        TextButton(onClick = { show = true }) { Text("Recovery key (optional)") }
+        return
+    }
+    SectionCard("Recovery key") {
+        SecureWindow()
         Text(
-            "If you lose every phone, this key is the only way to read your server copy. Write it on paper.",
-            style = MaterialTheme.typography.bodyMedium,
+            "Only needed if you ever lose every phone and browser at once. Keep it somewhere safe, or ignore it.",
+            style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(top = 4.dp),
         )
-        if (show) {
-            SecureWindow()
-            Text(recovery, style = MaterialTheme.typography.headlineSmall, fontFamily = FontFamily.Monospace, modifier = Modifier.padding(vertical = 12.dp))
-            Button(onClick = viewModel::dismissRecoveryReminder) { Text("I have written it down") }
-        } else {
-            OutlinedButton(onClick = { show = true }, modifier = Modifier.padding(top = 8.dp)) { Text("Show recovery key") }
+        Text(recovery, style = MaterialTheme.typography.headlineSmall, fontFamily = FontFamily.Monospace, modifier = Modifier.padding(vertical = 12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick = { show = false }) { Text("Hide") }
+            TextButton(onClick = viewModel::dismissRecoveryReminder) { Text("I saved it, remove it from here") }
         }
     }
 }
@@ -641,16 +644,21 @@ private fun WaitingCard(state: CloudState.WaitingForApproval, busy: Boolean, vie
                 Text("$n", style = MaterialTheme.typography.displayLarge, fontFamily = FontFamily.Monospace, modifier = Modifier.padding(vertical = 8.dp))
             }
         }
-        Text("No other phone? Use your recovery key instead:", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 12.dp))
-        OutlinedTextField(
-            value = recovery, onValueChange = { recovery = it }, label = { Text("Recovery key") }, singleLine = true,
-            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters, autoCorrect = false),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedButton(onClick = { viewModel.recover(recovery); recovery = "" }, enabled = !busy && recovery.isNotBlank(), modifier = Modifier.padding(top = 4.dp)) {
-            Text("Use recovery key")
+        var more by rememberSaveable { mutableStateOf(false) }
+        if (!more) {
+            TextButton(onClick = { more = true }) { Text("More options") }
+        } else {
+            Text("Have a recovery key? Enter it instead:", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 12.dp))
+            OutlinedTextField(
+                value = recovery, onValueChange = { recovery = it }, label = { Text("Recovery key") }, singleLine = true,
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters, autoCorrect = false),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedButton(onClick = { viewModel.recover(recovery); recovery = "" }, enabled = !busy && recovery.isNotBlank(), modifier = Modifier.padding(top = 4.dp)) {
+                Text("Use recovery key")
+            }
+            TextButton(onClick = viewModel::disconnect) { Text("Cancel and disconnect") }
         }
-        TextButton(onClick = viewModel::disconnect) { Text("Cancel and disconnect") }
     }
 }
 
