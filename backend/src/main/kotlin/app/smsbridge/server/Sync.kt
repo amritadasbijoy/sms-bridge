@@ -42,7 +42,10 @@ import kotlinx.serialization.Serializable
     val id: String, val name: String, val platform: String, val encPublicKey: String, val signPublicKey: String, val createdAt: String,
     /** The browser asked to be confirmed on a phone by number matching. */
     val confirmRequested: Boolean = false,
+    /** HMAC(QR secret, fingerprint) from a phone that scanned a browser's "Add another phone" code. */
+    val linkProof: String? = null,
 )
+@Serializable data class LinkProof(val proof: String)
 @Serializable data class Approve(val keys: List<WrappedKey>)
 @Serializable data class AccountDevice(val id: String, val name: String, val platform: String)
 @Serializable data class UploadEvent(val eventId: String, val deviceSequence: Long, val keyVersion: Int, val ciphertext: String, val signature: String)
@@ -189,22 +192,35 @@ class SyncService(private val db: Db, private val wake: Notices = Notices()) {
 
     suspend fun pending(d: DeviceContext): List<PendingDevice> {
         d.requireTrusted()
-        return db.tx {
-            query(
-                """
-                SELECT id, name, platform, enc_public_key, sign_public_key, created_at, confirm_requested_at FROM devices
-                WHERE user_id = ? AND vault_trusted_at IS NULL AND revoked_at IS NULL
-                  AND enc_public_key IS NOT NULL AND sign_public_key IS NOT NULL
-                ORDER BY created_at
-                """.trimIndent(),
-                d.userId,
-            ) {
-                PendingDevice(
-                    it.uuid("id").toString(), it.getString("name"), it.getString("platform"), it.getString("enc_public_key"),
-                    it.getString("sign_public_key"), it.time("created_at").toString(), it.time("confirm_requested_at") != null,
-                )
-            }
+        return pendingFor(d.userId)
+    }
+
+    /** Devices of [userId] waiting for the vault key (for a trusted phone, or a trusted browser). */
+    suspend fun pendingFor(userId: UUID): List<PendingDevice> = db.tx {
+        query(
+            """
+            SELECT id, name, platform, enc_public_key, sign_public_key, created_at, confirm_requested_at, link_proof FROM devices
+            WHERE user_id = ? AND vault_trusted_at IS NULL AND revoked_at IS NULL
+              AND enc_public_key IS NOT NULL AND sign_public_key IS NOT NULL
+            ORDER BY created_at
+            """.trimIndent(),
+            userId,
+        ) {
+            PendingDevice(
+                it.uuid("id").toString(), it.getString("name"), it.getString("platform"), it.getString("enc_public_key"),
+                it.getString("sign_public_key"), it.time("created_at").toString(), it.time("confirm_requested_at") != null,
+                it.getBytes("link_proof")?.let(b64e::encodeToString),
+            )
         }
+    }
+
+    /** A waiting phone that scanned an "Add another phone" QR code leaves its proof for the browser. */
+    suspend fun setLinkProof(d: DeviceContext, proof: String) {
+        if (d.trusted) throw ApiException(HttpStatusCode.Conflict, "already_trusted", "This phone is already approved.")
+        val bytes = runCatching { b64.decode(proof) }.getOrNull()?.takeIf { it.size == 32 }
+            ?: throw ApiException(HttpStatusCode.BadRequest, "invalid_proof", "Invalid proof.")
+        db.tx { update("UPDATE devices SET link_proof = ? WHERE id = ?", bytes, d.deviceId) }
+        wake.bump(d.userId)
     }
 
     suspend fun accountDevices(d: DeviceContext): List<AccountDevice> {
@@ -218,19 +234,24 @@ class SyncService(private val db: Db, private val wake: Notices = Notices()) {
 
     suspend fun approve(d: DeviceContext, target: UUID, body: Approve, ip: String) {
         d.requireTrusted()
+        approveBy(d.userId, d.deviceId, target, body, ip)
+    }
+
+    /** [approver] (a trusted phone or browser of [userId]) wrapped every vault key version for [target]. */
+    suspend fun approveBy(userId: UUID, approver: UUID, target: UUID, body: Approve, ip: String) {
         db.tx {
             val pending = query(
                 "SELECT 1 FROM devices WHERE id = ? AND user_id = ? AND vault_trusted_at IS NULL AND revoked_at IS NULL AND enc_public_key IS NOT NULL",
-                target, d.userId,
+                target, userId,
             ) { 1 }.isNotEmpty()
             if (!pending) throw ApiException(HttpStatusCode.NotFound, "not_found", "No such device is waiting for approval.")
-            val version = query("SELECT current_version FROM vaults WHERE user_id = ?", d.userId) { it.getInt(1) }.single()
+            val version = query("SELECT current_version FROM vaults WHERE user_id = ?", userId) { it.getInt(1) }.single()
             requireAllVersions(body.keys, version)
-            body.keys.forEach { putKey(d.userId, it.keyVersion, target.toString(), it.wrappedKey, d.deviceId) }
-            update("UPDATE devices SET vault_trusted_at = now(), confirm_requested_at = NULL, confirm_salt = NULL WHERE id = ?", target)
-            audit(d.userId, target, "vault_device_approved", "ok", ip)
+            body.keys.forEach { putKey(userId, it.keyVersion, target.toString(), it.wrappedKey, approver) }
+            update("UPDATE devices SET vault_trusted_at = now(), confirm_requested_at = NULL, confirm_salt = NULL, link_proof = NULL WHERE id = ?", target)
+            audit(userId, target, "vault_device_approved", "ok", ip)
         }
-        wake.bump(d.userId)
+        wake.bump(userId)
     }
 
     suspend fun upload(d: DeviceContext, batch: UploadBatch): UploadResult {
@@ -337,6 +358,10 @@ fun Route.vaultAndSyncRoutes(auth: AuthService, sync: SyncService) {
             call.respond(HttpStatusCode.NoContent)
         }
         get("/requests") { call.respond(sync.pending(sync.device(call))) }
+        post("/link-proof") {
+            sync.setLinkProof(sync.device(call), call.receive<LinkProof>().proof)
+            call.respond(HttpStatusCode.NoContent)
+        }
         // Names of the account's devices, for an approved phone showing messages from the others.
         get("/devices") { call.respond(sync.accountDevices(sync.device(call))) }
         post("/requests/{id}/approve") {

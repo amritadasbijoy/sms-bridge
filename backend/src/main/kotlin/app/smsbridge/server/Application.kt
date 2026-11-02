@@ -68,6 +68,7 @@ fun main() {
     val signPublicKey: String? = null,
 )
 @Serializable data class DeviceToken(val deviceId: String, val deviceToken: String)
+@Serializable data class RegisterPhone(val deviceId: String, val name: String, val encPublicKey: String, val signPublicKey: String)
 @Serializable data class DeviceInfo(
     val id: String, val name: String, val platform: String, val createdAt: String,
     val lastSeenAt: String?, val revokedAt: String?, val vaultTrusted: Boolean = false,
@@ -159,7 +160,7 @@ fun Application.module(config: Config, db: Db) {
             deviceRoutes(auth, devices)
             vaultAndSyncRoutes(auth, sync)
             twoFactorRoutes(auth, twoFactor, db)
-            browserAndInviteRoutes(auth, browsers, invites)
+            browserAndInviteRoutes(auth, browsers, invites, sync)
             confirmRoutes(auth, sync, wake, confirm, connects, releases)
             releaseRoutes(config, releases)
             loginRoutes(sync, logins) { token -> setSessionCookie(token, config) }
@@ -171,6 +172,11 @@ fun Application.module(config: Config, db: Db) {
                 // A browser asks to be signed in by a phone (QR or username + number).
                 post("/auth/login-requests") {
                     call.respond(HttpStatusCode.Created, logins.create(call.receive(), call.ip()))
+                }
+                // A phone without an account scanned a browser's QR code: its own account, and it is the first device.
+                post("/phone/start") {
+                    val body = call.receive<RegisterPhone>()
+                    call.respond(HttpStatusCode.Created, devices.registerFirst(body, call.ip()) { auth.registerPhone(call.ip()) })
                 }
                 // "Get started": a new account without a password.
                 post("/auth/start") {
@@ -279,11 +285,21 @@ class AuthService(private val db: Db, private val config: Config, val twoFactor:
      * "Get started": an account without a password (signed into later by scanning with a phone).
      * The username is generated; the same registration rules apply (first account, open, or invite).
      */
-    suspend fun registerPasswordless(ip: String, invite: String?): Pair<UUID, String> {
+    suspend fun registerPasswordless(ip: String, invite: String?): Pair<UUID, String> = withGeneratedName { createUser(it, null, ip, invite) }
+
+    /**
+     * A phone without an account scanned a browser's sign-in QR code: it gets its own account (no
+     * password, generated username), like WhatsApp. Allowed without an invite unless the operator
+     * turned [Config.phoneSignup] off.
+     */
+    suspend fun registerPhone(ip: String): UUID =
+        withGeneratedName { createUser(it, null, ip, null, open = config.phoneSignup) }.first
+
+    private suspend fun withGeneratedName(create: suspend (String) -> UUID): Pair<UUID, String> {
         repeat(5) {
             val name = "user-" + Secrets.pairingCode().replace("-", "").lowercase().take(8)
             try {
-                return createUser(name, null, ip, invite) to name
+                return create(name) to name
             } catch (e: ApiException) {
                 if (e.code != "username_taken") throw e
             }
@@ -312,7 +328,7 @@ class AuthService(private val db: Db, private val config: Config, val twoFactor:
     suspend fun hasPassword(userId: UUID): Boolean =
         db.tx { query("SELECT password_hash IS NOT NULL FROM users WHERE id = ?", userId) { it.getBoolean(1) }.single() }
 
-    private suspend fun createUser(name: String, hash: String?, ip: String, invite: String?): UUID {
+    private suspend fun createUser(name: String, hash: String?, ip: String, invite: String?, open: Boolean = false): UUID {
         val id = UUID.randomUUID()
         return db.tx {
             // Serialise first-account creation so two simultaneous requests cannot both succeed.
@@ -323,7 +339,7 @@ class AuthService(private val db: Db, private val config: Config, val twoFactor:
             }
             update("INSERT INTO users (id, username, password_hash) VALUES (?, ?, ?)", id, name, hash)
             // After the first account: open registration, or a valid unused invite (consumed here, in the same transaction).
-            if (count > 0 && !config.allowRegistration && !consumeInvite(invite, id)) {
+            if (count > 0 && !open && !config.allowRegistration && !consumeInvite(invite, id)) {
                 throw ApiException(
                     HttpStatusCode.Forbidden,
                     if (invite.isNullOrBlank()) "registration_closed" else "invalid_invite",
@@ -538,6 +554,28 @@ class DeviceService(private val db: Db) {
             }
             update("INSERT INTO device_tokens (token_hash, device_id) VALUES (?, ?)", Secrets.sha256(token), deviceId)
             audit(userId, deviceId, "device_register", "ok", ip)
+        }
+        return DeviceToken(deviceId.toString(), token)
+    }
+
+    /** A phone's own new account: [createAccount] runs only after the request is valid. */
+    suspend fun registerFirst(request: RegisterPhone, ip: String, createAccount: suspend () -> UUID): DeviceToken {
+        val deviceId = runCatching { UUID.fromString(request.deviceId) }.getOrNull()
+            ?: throw ApiException(HttpStatusCode.BadRequest, "invalid_device", "Invalid device id.")
+        requireRawKey(request.encPublicKey)
+        requireRawKey(request.signPublicKey)
+        if (db.tx { query("SELECT 1 FROM devices WHERE id = ?", deviceId) { 1 }.isNotEmpty() }) {
+            throw ApiException(HttpStatusCode.Conflict, "device_unavailable", "This device id is taken. Try again.")
+        }
+        val userId = createAccount()
+        val token = Secrets.token()
+        db.tx {
+            update(
+                "INSERT INTO devices (id, user_id, name, platform, enc_public_key, sign_public_key) VALUES (?, ?, ?, 'android', ?, ?)",
+                deviceId, userId, request.name.trim().take(64).ifEmpty { "Android device" }, request.encPublicKey, request.signPublicKey,
+            )
+            update("INSERT INTO device_tokens (token_hash, device_id) VALUES (?, ?)", Secrets.sha256(token), deviceId)
+            audit(userId, deviceId, "phone_account_created", "ok", ip)
         }
         return DeviceToken(deviceId.toString(), token)
     }

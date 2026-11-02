@@ -241,49 +241,35 @@ function PhoneSignIn({ username, onApproved, onFailed }: { username?: string; on
   );
 }
 
-/** The Android app, for visitors who do not have it yet (version from the server's latest release). */
-function DownloadApp() {
+/** The Android app's current version, from the server's latest release. */
+function useAppVersion(): string | null {
   const [version, setVersion] = useState<string | null>(null);
   useEffect(() => {
     fetch("/api/v1/app/latest", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then((r: { versionName?: string } | null) => setVersion(r?.versionName ?? null), () => {});
   }, []);
-  return (
-    <div className="w-full max-w-sm rounded-lg border bg-card p-4 text-center shadow-sm">
-      <p className="text-sm font-medium">SMS Bridge for Android</p>
-      <a
-        href="/download/sms-bridge.apk"
-        download
-        className="mt-3 inline-flex h-11 w-full items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-      >
-        Download the app{version ? ` (version ${version})` : ""}
-      </a>
-      <p className="mt-2 text-xs text-muted-foreground">
-        Open the downloaded file on your Android phone and tap Install. If Android asks, allow installing from your
-        browser. Updates then arrive inside the app.
-      </p>
-    </div>
-  );
+  return version;
 }
 
+/**
+ * The front page, like WhatsApp Web: the steps on one side, the QR code on the other. A phone
+ * without an account that scans it gets one on its own, so there is nothing to sign up for.
+ */
 export default function Login() {
   const { me, refreshMe } = useSession();
   const router = useRouter();
+  const version = useAppVersion();
   const [mode, setMode] = useState<"phone" | "username" | "password" | "create">("phone");
   const [username, setUsername] = useState("");
   const [submitted, setSubmitted] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [registrationOpen, setRegistrationOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const invite = router.isReady && typeof router.query.invite === "string" ? router.query.invite : "";
 
   useEffect(() => {
     if (me) void router.replace("/dashboard/");
   }, [me, router]);
-  useEffect(() => {
-    api.status().then((s) => setRegistrationOpen(s.registrationOpen), () => {});
-  }, []);
 
   const approved = useCallback(() => void refreshMe(), [refreshMe]);
   const failed = useCallback((m: string) => {
@@ -291,11 +277,11 @@ export default function Login() {
     setSubmitted(null);
   }, []);
 
-  async function getStarted() {
+  async function acceptInvite() {
     setBusy(true);
     setError(null);
     try {
-      await api.start(invite || undefined);
+      await api.start(invite);
       await refreshMe();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Could not reach the server.");
@@ -304,63 +290,98 @@ export default function Login() {
     }
   }
 
-  const canStart = registrationOpen || Boolean(invite);
-  return (
-    <div className="flex min-h-screen flex-col items-center justify-center gap-4 px-4 py-8">
-      <Head>
-        <title>Sign in · SMS Bridge</title>
-      </Head>
-      <DownloadApp />
-      {mode === "password" || mode === "create" ? (
+  if (mode === "password" || mode === "create") {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 px-4 py-8">
+        <Head>
+          <title>Sign in · SMS Bridge</title>
+        </Head>
         <PasswordForm initialCreating={mode === "create"} onBack={() => setMode("phone")} />
-      ) : (
-        <Card className="w-full max-w-sm">
-          <CardHeader>
-            <CardTitle>{canStart ? "Welcome to SMS Bridge" : "Sign in with your phone"}</CardTitle>
-            <CardDescription>
-              {mode === "phone"
-                ? "Open SMS Bridge on a connected phone, go to Sync and tap Scan a browser's QR code."
-                : "Your connected phone confirms it: no password needed."}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {canStart && (
-              <div className="space-y-2 rounded-md border p-3">
-                <p className="text-sm font-medium">New here?</p>
-                <Button className="w-full" disabled={busy} onClick={() => void getStarted()}>
-                  {busy ? "Please wait…" : invite ? "Accept the invite and get started" : "Get started"}
-                </Button>
-                <p className="text-xs text-muted-foreground">No password needed: you connect your phone with one scan.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-h-screen flex-col items-center justify-center px-4 py-8">
+      <Head>
+        <title>SMS Bridge · Read your SMS on this computer</title>
+      </Head>
+      <div className="w-full max-w-3xl">
+        <p className="mb-4 text-center text-lg font-semibold sm:text-left">SMS Bridge</p>
+        <Card>
+          <CardContent className="grid gap-8 p-6 sm:p-8 md:grid-cols-[1fr_auto]">
+            <div className="space-y-5">
+              <div className="space-y-1">
+                <h1 className="text-2xl font-semibold">Read your SMS on this computer</h1>
+                <p className="text-sm text-muted-foreground">New messages appear here the moment your phone gets them. No account, no password.</p>
               </div>
-            )}
-            {error && <Alert tone="error">{error}</Alert>}
-            {mode === "phone" && <PhoneSignIn onApproved={approved} onFailed={failed} />}
-            {mode === "username" && !submitted && (
-              <form
-                className="space-y-3"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  setError(null);
-                  setSubmitted(username.trim());
-                }}
-              >
-                <Label htmlFor="login-username">Your username</Label>
-                <Input id="login-username" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" required />
-                <Button type="submit" className="w-full">Continue</Button>
-              </form>
-            )}
-            {mode === "username" && submitted && <PhoneSignIn username={submitted} onApproved={approved} onFailed={failed} />}
-            <div className="flex flex-col gap-1">
-              {mode !== "username" ? (
-                <Button variant="ghost" onClick={() => { setMode("username"); setError(null); }}>Can&apos;t scan? Use my username instead</Button>
+              {mode === "phone" ? (
+                <ol className="space-y-4 text-sm">
+                  <li className="flex gap-3">
+                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">1</span>
+                    <div className="space-y-2">
+                      <p>Install SMS Bridge on your Android phone.</p>
+                      <a
+                        href="/download/sms-bridge.apk"
+                        download
+                        className="inline-flex h-10 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                      >
+                        Download the app{version ? ` (${version})` : ""}
+                      </a>
+                      <p className="text-xs text-muted-foreground">Open the downloaded file on the phone and tap Install. If Android asks, allow installing from your browser.</p>
+                    </div>
+                  </li>
+                  <li className="flex gap-3">
+                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">2</span>
+                    <p>
+                      Open SMS Bridge and tap <strong>Scan QR code</strong>.
+                    </p>
+                  </li>
+                  <li className="flex gap-3">
+                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">3</span>
+                    <p>Point your phone at the code on this screen. That&apos;s it.</p>
+                  </li>
+                </ol>
               ) : (
-                <Button variant="ghost" onClick={() => { setMode("phone"); setSubmitted(null); setError(null); }}>Scan a QR code instead</Button>
+                <p className="text-sm text-muted-foreground">Type your username. Your phone gets a notification and you tap the number shown here.</p>
               )}
-              <Button variant="ghost" onClick={() => setMode("password")}>Use a password</Button>
+              {invite && (
+                <Button variant="outline" disabled={busy} onClick={() => void acceptInvite()}>
+                  {busy ? "Please wait…" : "Accept the invite"}
+                </Button>
+              )}
+            </div>
+            <div className="flex flex-col items-center gap-3 md:w-[260px]">
+              {error && <Alert tone="error">{error}</Alert>}
+              {mode === "phone" && <PhoneSignIn onApproved={approved} onFailed={failed} />}
+              {mode === "username" && !submitted && (
+                <form
+                  className="w-full space-y-3"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    setError(null);
+                    setSubmitted(username.trim());
+                  }}
+                >
+                  <Label htmlFor="login-username">Your username</Label>
+                  <Input id="login-username" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" required />
+                  <Button type="submit" className="w-full">Continue</Button>
+                </form>
+              )}
+              {mode === "username" && submitted && <PhoneSignIn username={submitted} onApproved={approved} onFailed={failed} />}
+              {mode === "phone" && <p className="text-center text-xs text-muted-foreground">The code refreshes on its own.</p>}
             </div>
           </CardContent>
         </Card>
-      )}
+        <div className="mt-3 flex flex-wrap justify-center gap-1 text-sm">
+          {mode !== "username" ? (
+            <Button variant="ghost" size="sm" onClick={() => { setMode("username"); setError(null); }}>Can&apos;t scan? Use my username</Button>
+          ) : (
+            <Button variant="ghost" size="sm" onClick={() => { setMode("phone"); setSubmitted(null); setError(null); }}>Scan a QR code instead</Button>
+          )}
+          <Button variant="ghost" size="sm" onClick={() => setMode("password")}>Sign in with a password</Button>
+        </div>
+      </div>
     </div>
   );
 }

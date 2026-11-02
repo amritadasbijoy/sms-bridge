@@ -34,6 +34,18 @@ class CloudApi(baseUrl: String, private val token: String? = null) {
                 .put("encPublicKey", b64(encPublic)).put("signPublicKey", b64(signPublic)),
         ).getString("deviceToken")
 
+    /** A phone without an account: the server creates one (no password) with this phone as its first device. Returns the token. */
+    fun startPhone(deviceId: String, name: String, encPublic: ByteArray, signPublic: ByteArray): String =
+        call(
+            "POST", "/api/v1/phone/start",
+            JSONObject().put("deviceId", deviceId).put("name", name).put("encPublicKey", b64(encPublic)).put("signPublicKey", b64(signPublic)),
+        ).getString("deviceToken")
+
+    /** "Add another phone": tells the browser that showed the QR code that this phone scanned it. */
+    fun linkProof(proof: ByteArray) {
+        call("POST", "/api/v1/vault/link-proof", JSONObject().put("proof", b64(proof)))
+    }
+
     fun vaultStatus(): VaultStatusDto = call("GET", "/api/v1/vault").let {
         VaultStatusDto(
             it.getBoolean("exists"), if (it.isNull("currentVersion")) null else it.getInt("currentVersion"), it.getBoolean("deviceTrusted"),

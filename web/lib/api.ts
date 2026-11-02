@@ -44,6 +44,10 @@ export interface Device {
   lastSeenAt: string | null; revokedAt: string | null; vaultTrusted: boolean;
 }
 export interface WrappedKey { keyVersion: number; wrappedKey: string }
+export interface PendingDevice {
+  id: string; name: string; platform: string; encPublicKey: string; signPublicKey: string; createdAt: string;
+  linkProof?: string | null;
+}
 export interface BrowserVault { exists: boolean; currentVersion: number | null; recoveryKeys: WrappedKey[]; approvedPhones: number }
 export interface StoredEvent {
   eventId: string; deviceId: string; deviceSequence: number; serverSequence: number;
@@ -74,6 +78,10 @@ export const api = {
       "GET",
       `/browser/devices/${encodeURIComponent(deviceId)}/keys`,
     ),
+  /** Phones waiting for the vault key; only an approved browser may ask. */
+  browserPending: (deviceId: string) => request<PendingDevice[]>("GET", `/browser/devices/${encodeURIComponent(deviceId)}/pending`),
+  browserApprove: (deviceId: string, target: string, keys: WrappedKey[]) =>
+    request<void>("POST", `/browser/devices/${encodeURIComponent(deviceId)}/approve/${encodeURIComponent(target)}`, { keys }),
   requestConfirm: (deviceId: string) => request<void>("POST", `/browser/devices/${encodeURIComponent(deviceId)}/confirm`, {}),
   connectRequests: () => request<{ id: string; name: string; createdAt: string; options: number[] }[]>("GET", "/connect-requests"),
   confirmConnect: (id: string, number: number) =>

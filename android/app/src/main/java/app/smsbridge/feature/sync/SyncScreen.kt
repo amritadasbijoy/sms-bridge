@@ -147,13 +147,36 @@ class SyncViewModel @Inject constructor(
     fun onScanned(text: String) = run {
         _info.value = null
         PairLinks.parseLogin(text)?.let { login ->
-            _info.value = "Signed in ${cloud.approveScannedLogin(login)}."
+            _info.value = "Done. ${cloud.approveScannedLogin(login)} now shows your messages."
+            _wasRevoked.value = false
             return@run
         }
         val link = PairLinks.parse(text) ?: throw IllegalArgumentException("That is not an SMS Bridge QR code. Scan the one shown on your dashboard.")
         _info.value = cloud.handleLink(link)
         _wasRevoked.value = false
         _recoveryReminder.value = cloud.recoveryReminder()
+        if (link.linkSecret != null && cloud.state.value is CloudState.WaitingForApproval) waitForBrowserApproval()
+    }
+
+    /** True while an "Add another phone" scan waits for the browser to approve this phone. */
+    private val _linking = MutableStateFlow(false)
+    val linking: StateFlow<Boolean> = _linking.asStateFlow()
+
+    private fun waitForBrowserApproval() {
+        _linking.value = true
+        viewModelScope.launch {
+            try {
+                repeat(90) { // the browser approves within seconds; give up after 3 minutes
+                    kotlinx.coroutines.delay(2_000)
+                    if (runCatching { cloud.checkApproval() }.getOrNull() is CloudState.Ready) {
+                        _info.value = "Added. New SMS on this phone now show on your computer."
+                        return@launch
+                    }
+                }
+            } finally {
+                _linking.value = false
+            }
+        }
     }
 
     // ---- Number matching ----
@@ -323,7 +346,16 @@ fun SyncScreen(viewModel: SyncViewModel = hiltViewModel(), onOpenRemote: () -> U
                 }
             }
             is CloudState.NeedsRecoverySetup -> item { RecoveryKeyCard(s.recoveryKey, busy, viewModel::confirmRecoverySaved, viewModel::confirmRecoveryLater) }
-            is CloudState.WaitingForApproval -> item { WaitingCard(s, busy, viewModel) }
+            is CloudState.WaitingForApproval -> item {
+                val linking by viewModel.linking.collectAsStateWithLifecycle()
+                if (linking) {
+                    SectionCard("Almost done") {
+                        Text("Keep the page on your computer open. This phone is added within a few seconds…", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp))
+                    }
+                } else {
+                    WaitingCard(s, busy, viewModel)
+                }
+            }
             is CloudState.Ready -> {
                 item { StayReachableCard() }
                 item { ConnectedCard(s, viewModel) }
@@ -341,7 +373,7 @@ private fun ConnectCard(busy: Boolean, wasRevoked: Boolean, lastServer: String, 
     var code by rememberSaveable { mutableStateOf("") }
     var manual by rememberSaveable { mutableStateOf(false) }
     val scan = rememberQrScanner(onScanned)
-    SectionCard("Connect to your server") {
+    SectionCard("Link to your computer") {
         if (wasRevoked) {
             Text(
                 "This phone was removed from the server (revoked on the Devices page), so it stopped syncing. " +
@@ -352,12 +384,13 @@ private fun ConnectCard(busy: Boolean, wasRevoked: Boolean, lastServer: String, 
             )
         }
         Text(
-            "Open your SMS Bridge dashboard in a browser, then scan the QR code it shows.",
-            style = MaterialTheme.typography.bodySmall,
+            "On your computer, open ${lastServer.substringAfter("://").ifBlank { app.smsbridge.BuildConfig.DEFAULT_SITE }} and scan the QR code it shows. " +
+                "Your messages then appear there, live. No account or password needed.",
+            style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.padding(top = 4.dp),
         )
-        Button(onClick = { scan("Scan the QR code on your SMS Bridge dashboard") }, enabled = !busy, modifier = Modifier.padding(top = 8.dp)) {
-            Text(if (busy) "Connecting…" else "Scan QR code")
+        Button(onClick = { scan("Scan the QR code on your computer") }, enabled = !busy, modifier = Modifier.padding(top = 8.dp).fillMaxWidth()) {
+            Text(if (busy) "Linking…" else "Scan QR code")
         }
         if (!manual) {
             TextButton(onClick = { manual = true }) { Text("Enter the address and code instead") }
@@ -685,7 +718,7 @@ private fun ConnectedCard(state: CloudState.Ready, viewModel: SyncViewModel) {
             Switch(checked = paused, onCheckedChange = viewModel::setPaused)
         }
         val scan = rememberQrScanner(viewModel::onScanned)
-        Button(onClick = { scan("Scan the QR code your browser shows") }, modifier = Modifier.padding(top = 8.dp)) { Text("Scan a browser's QR code") }
+        Button(onClick = { scan("Scan the QR code your computer shows") }, modifier = Modifier.padding(top = 8.dp)) { Text("Link a computer (scan QR code)") }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = viewModel::syncNow, enabled = !paused) { Text("Sync now") }
             TextButton(onClick = { confirmDisconnect = true }) { Text("Disconnect") }

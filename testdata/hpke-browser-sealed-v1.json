@@ -1,0 +1,7 @@
+{
+  "note": "Sealed by the browser's hpkeSeal (web/lib/hpke.ts) for the throwaway key in hpke-vectors-v1.json; the phone's Tink must open it.",
+  "recipientId": "b0000000-0000-4000-8000-00000000web1",
+  "keyVersion": 3,
+  "vaultKey": "yMfGxcTDwsHAv769vLu6ubi3trW0s7KxsK+urayrqqk=",
+  "wrapped": "QnrHdouIzcPYOjCzI0Qc5N6oDugxeXWgEWeAw5EhBWp2dC1qrQomYYV1ZBRpYF5SclazEiMxXEiuic4e7UrgvJlS670ank2p9rc2wPla9Wg="
+}

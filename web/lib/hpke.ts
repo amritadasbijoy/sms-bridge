@@ -60,6 +60,24 @@ const labeledExtract = (suite: Bytes, salt: Bytes, label: string, ikm: Bytes) =>
 const labeledExpand = (suite: Bytes, prk: Bytes, label: string, info: Bytes, length: number) =>
   expand(prk, concat(i2osp(length, 2), enc.encode("HPKE-v1"), suite, enc.encode(label), info), length);
 
+/** RFC 9180 Encap/Decap and KeySchedule (mode_base): the AES key and nonce for one message. */
+async function keySchedule(dh: Bytes, encapsulated: Bytes, recipientPublic: Bytes, info: Bytes): Promise<{ key: Bytes; nonce: Bytes }> {
+  if (dh.every((b) => b === 0)) throw new Error("invalid HPKE public key");
+  // shared_secret = ExtractAndExpand(dh, enc || pkR)
+  const eaePrk = await labeledExtract(KEM_SUITE, new Uint8Array(0), "eae_prk", dh);
+  const shared = await labeledExpand(KEM_SUITE, eaePrk, "shared_secret", concat(encapsulated, recipientPublic), 32);
+  const empty = new Uint8Array(0);
+  const pskIdHash = await labeledExtract(HPKE_SUITE, empty, "psk_id_hash", empty);
+  const infoHash = await labeledExtract(HPKE_SUITE, empty, "info_hash", info);
+  const context = concat(new Uint8Array([0x00]), pskIdHash, infoHash);
+  const secret = await labeledExtract(HPKE_SUITE, shared, "secret", empty);
+  try {
+    return { key: await labeledExpand(HPKE_SUITE, secret, "key", context, 32), nonce: await labeledExpand(HPKE_SUITE, secret, "base_nonce", context, 12) };
+  } finally {
+    for (const b of [dh, shared, secret]) b.fill(0);
+  }
+}
+
 /**
  * Opens a single-shot HPKE message. `privateKey` may be non-extractable (X25519, usage deriveBits);
  * `publicKey` is the recipient's raw 32-byte public key.
@@ -69,27 +87,32 @@ export async function hpkeOpen(privateKey: CryptoKey, publicKey: Bytes, message:
   const encapsulated = message.slice(0, N_ENC);
   const ephemeral = await crypto.subtle.importKey("raw", encapsulated, { name: "X25519" }, false, []);
   const dh = new Uint8Array(await crypto.subtle.deriveBits({ name: "X25519", public: ephemeral }, privateKey, 256));
-  if (dh.every((b) => b === 0)) throw new Error("invalid HPKE public key");
-
-  // Decap: shared_secret = ExtractAndExpand(dh, enc || pkR)
-  const eaePrk = await labeledExtract(KEM_SUITE, new Uint8Array(0), "eae_prk", dh);
-  const shared = await labeledExpand(KEM_SUITE, eaePrk, "shared_secret", concat(encapsulated, publicKey), 32);
-
-  // KeySchedule, mode_base (no PSK)
-  const empty = new Uint8Array(0);
-  const pskIdHash = await labeledExtract(HPKE_SUITE, empty, "psk_id_hash", empty);
-  const infoHash = await labeledExtract(HPKE_SUITE, empty, "info_hash", info);
-  const context = concat(new Uint8Array([0x00]), pskIdHash, infoHash);
-  const secret = await labeledExtract(HPKE_SUITE, shared, "secret", empty);
-  const key = await labeledExpand(HPKE_SUITE, secret, "key", context, 32);
-  const nonce = await labeledExpand(HPKE_SUITE, secret, "base_nonce", context, 12);
-
+  const { key, nonce } = await keySchedule(dh, encapsulated, publicKey, info);
   try {
     const aes = await crypto.subtle.importKey("raw", key, { name: "AES-GCM" }, false, ["decrypt"]);
     // Sequence number 0: the nonce is the base nonce. AAD is empty.
-    return new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: nonce, additionalData: empty, tagLength: 128 }, aes, message.subarray(N_ENC)));
+    return new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: nonce, additionalData: new Uint8Array(0), tagLength: 128 }, aes, message.subarray(N_ENC)));
   } finally {
-    for (const b of [dh, shared, secret, key]) b.fill(0);
+    key.fill(0);
+  }
+}
+
+/**
+ * Seals a single-shot HPKE message for a raw X25519 public key, in Tink's NO_PREFIX layout
+ * (`enc || ciphertext`), so a phone opens it like a key another phone wrapped (CloudCrypto.unwrapForDevice).
+ */
+export async function hpkeSeal(recipientPublic: Bytes, plaintext: Bytes, info: Bytes): Promise<Bytes> {
+  const ephemeral = (await crypto.subtle.generateKey({ name: "X25519" }, false, ["deriveBits"])) as CryptoKeyPair;
+  const encapsulated = new Uint8Array(await crypto.subtle.exportKey("raw", ephemeral.publicKey));
+  const recipient = await crypto.subtle.importKey("raw", recipientPublic, { name: "X25519" }, false, []);
+  const dh = new Uint8Array(await crypto.subtle.deriveBits({ name: "X25519", public: recipient }, ephemeral.privateKey, 256));
+  const { key, nonce } = await keySchedule(dh, encapsulated, recipientPublic, info);
+  try {
+    const aes = await crypto.subtle.importKey("raw", key, { name: "AES-GCM" }, false, ["encrypt"]);
+    const sealed = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce, additionalData: new Uint8Array(0), tagLength: 128 }, aes, plaintext));
+    return concat(encapsulated, sealed);
+  } finally {
+    key.fill(0);
   }
 }
 

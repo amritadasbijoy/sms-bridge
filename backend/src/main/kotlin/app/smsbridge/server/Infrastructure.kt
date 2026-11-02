@@ -30,6 +30,8 @@ data class Config(
     val trustProxy: Boolean,
     /** Lets the operator publish app releases (tools/publish-release.sh). Unset = publishing disabled. */
     val adminToken: String? = null,
+    /** A phone that scans a sign-in QR code without an account gets one (no password, no invite). */
+    val phoneSignup: Boolean = true,
 ) {
     companion object {
         fun fromEnv(env: Map<String, String> = System.getenv()) = Config(
@@ -41,6 +43,7 @@ data class Config(
             allowRegistration = env["SMSBRIDGE_ALLOW_REGISTRATION"]?.toBooleanStrict() ?: false,
             trustProxy = env["SMSBRIDGE_TRUST_PROXY"]?.toBooleanStrict() ?: false,
             adminToken = env["SMSBRIDGE_ADMIN_TOKEN"]?.takeIf { it.length >= 32 },
+            phoneSignup = env["SMSBRIDGE_PHONE_SIGNUP"]?.toBooleanStrict() ?: true,
         )
     }
 }
