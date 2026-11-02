@@ -13,6 +13,8 @@ import kotlinx.coroutines.flow.asStateFlow
 sealed interface NavRequest {
     data class OpenThread(val addressKey: String) : NavRequest
     data class Compose(val recipient: String?, val body: String?) : NavRequest
+    /** A dashboard pairing link opened on the phone (smsbridge://pair?...): handled by the Sync screen. */
+    data object OpenSync : NavRequest
 }
 
 /** Hands navigation requests from Activity intents (notifications, sms: links) to the Compose nav graph. */
@@ -20,6 +22,12 @@ sealed interface NavRequest {
 class NavigationRequests @Inject constructor() {
     private val _pending = MutableStateFlow<NavRequest?>(null)
     val pending: StateFlow<NavRequest?> = _pending.asStateFlow()
+
+    private val _pairLink = MutableStateFlow<String?>(null)
+    /** The last opened pairing link, until the Sync screen takes it. */
+    val pairLink: StateFlow<String?> = _pairLink.asStateFlow()
+
+    fun takePairLink(): String? = _pairLink.value.also { _pairLink.value = null }
 
     fun handle(intent: Intent?) {
         intent ?: return
@@ -30,6 +38,10 @@ class NavigationRequests @Inject constructor() {
                 intent.dataString,
                 intent.getStringExtra("sms_body") ?: intent.getStringExtra(Intent.EXTRA_TEXT),
             )?.let { NavRequest.Compose(it.recipients.joinToString(", ").ifEmpty { null }, it.body) }
+            Intent.ACTION_VIEW -> intent.dataString?.takeIf { it.startsWith("smsbridge://pair?") }?.let {
+                _pairLink.value = it
+                NavRequest.OpenSync
+            }
             else -> null
         } ?: _pending.value
     }

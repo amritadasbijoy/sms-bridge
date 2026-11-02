@@ -49,6 +49,13 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Pairing links from the web dashboard (same as scanning its QR code). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="smsbridge" android:host="pair" />
+            </intent-filter>
             <!-- SMS role requirement: compose from sms:/smsto:/mms:/mmsto: links. -->
             <intent-filter>
                 <action android:name="android.intent.action.SENDTO" />

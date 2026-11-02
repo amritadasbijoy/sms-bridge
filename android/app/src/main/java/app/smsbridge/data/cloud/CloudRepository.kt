@@ -43,7 +43,7 @@ sealed interface CloudState {
 
 data class HistoryStatus(val uploadedFrom: Long?, val fullHistoryQueued: Boolean)
 
-data class PendingApproval(val deviceId: String, val name: String, val safetyCode: String, internal val encPublic: ByteArray)
+data class PendingApproval(val deviceId: String, val name: String, val safetyCode: String, internal val encPublic: ByteArray, internal val signPublic: ByteArray = ByteArray(0))
 
 /**
  * The phone's side of docs/sync-design.md. Secrets (device private keys, vault keys, device token,
@@ -83,9 +83,18 @@ class CloudRepository @Inject constructor(
     suspend fun connect(serverUrl: String, pairingCode: String): CloudState = io {
         val server = CloudApi.normalize(serverUrl)
         val keys = DeviceKeys.generate()
-        val deviceId = devices.localDeviceId()
+        var deviceId = cloudDeviceId()
         val name = devices.localDevice.first()?.name ?: "Android device"
-        val token = CloudApi(server).register(pairingCode, deviceId, name, keys.encPublic, keys.signPublic)
+        val token = try {
+            CloudApi(server).register(pairingCode, deviceId, name, keys.encPublic, keys.signPublic)
+        } catch (e: CloudHttpException) {
+            if (e.code != "device_unavailable") throw e
+            // This phone was connected to another account before: join with a fresh identity.
+            // (A refused registration does not use up the pairing code.)
+            deviceId = UUID.randomUUID().toString()
+            CloudApi(server).register(pairingCode, deviceId, name, keys.encPublic, keys.signPublic)
+        }
+        settings.putString(K_CLOUD_DEVICE_ID, deviceId)
         settings.deletePrefix(PREFIX)
         settings.deletePrefix(K_REVOKED_NOTICE)
         settings.putString(K_SERVER, server)
@@ -108,15 +117,64 @@ class CloudRepository @Inject constructor(
         refresh()
     }
 
+    /**
+     * Acts on a scanned dashboard QR code: connects with its pairing code, and/or approves the browser
+     * it names (now if this phone is approved, otherwise as soon as it becomes approved). Returns a
+     * short message for the user.
+     */
+    suspend fun handleLink(link: PairLink): String = io {
+        var connected = false
+        if (refresh() is CloudState.NotConnected) {
+            val code = link.pairingCode ?: throw IllegalArgumentException("Connect this phone first: scan the QR code on the dashboard's Devices page.")
+            connect(link.server, code)
+            connected = true
+        }
+        if (!link.approvesBrowser) return@io "Connected."
+        if (refresh() is CloudState.Ready) {
+            "Approved ${approveScanned(link.deviceId!!, link.fingerprint!!)}."
+        } else {
+            settings.putString(K_SCAN_APPROVAL, "${link.deviceId}|${b64(link.fingerprint!!)}")
+            if (connected) "Connected. The browser opens once setup finishes." else "The browser will be approved once this phone is approved."
+        }
+    }
+
+    /** Approves the pending device with this id if its keys match the scanned fingerprint. Returns its name. */
+    suspend fun approveScanned(deviceId: String, fingerprint: ByteArray): String = io {
+        val request = pendingApprovals().firstOrNull { it.deviceId == deviceId }
+            ?: throw IllegalArgumentException("That browser is not waiting for approval any more. Reload the dashboard and scan again.")
+        if (!PairLinks.matches(fingerprint, request.encPublic, request.signPublic)) {
+            // The server lists different keys than the browser showed: never approve.
+            AppLog.w(TAG, "scanned fingerprint does not match the server's keys; not approving")
+            throw IllegalArgumentException("Security check failed: this browser's keys do not match the QR code. It was not approved.")
+        }
+        approve(request)
+        request.name
+    }
+
+    /** A browser scanned before this phone was approved: approve it now (best effort). */
+    private suspend fun approveRememberedScan() {
+        val saved = settings.getString(K_SCAN_APPROVAL) ?: return
+        settings.deletePrefix(K_SCAN_APPROVAL)
+        val (id, fp) = saved.split('|').takeIf { it.size == 2 } ?: return
+        runCatching { approveScanned(id, unb64(fp)) }.onFailure { AppLog.w(TAG, "could not approve the scanned browser", it) }
+    }
+
+    /** The recovery key the user chose to save later, formatted, or null. */
+    suspend fun recoveryReminder(): String? = io { secret(K_RECOVERY_REMINDER)?.let { CloudCrypto.formatRecoveryKey(it) } }
+
+    suspend fun dismissRecoveryReminder() = io { settings.deletePrefix(K_RECOVERY_REMINDER) }
+
     /** The user confirmed the recovery key is written down: upload the wrapped copies and become trusted. */
-    suspend fun confirmRecoverySaved(): CloudState = io {
+    suspend fun confirmRecoverySaved(remindLater: Boolean = false): CloudState = io {
         val recovery = secret(K_PENDING_RECOVERY) ?: return@io refresh()
         val keys = loadDeviceKeys()!!
-        val deviceId = devices.localDeviceId()
+        val deviceId = cloudDeviceId()
         val vk = secret(vkKey(1))!!
         val wrappedRecovery = WrappedKeyDto(1, CloudCrypto.wrapForRecovery(vk, recovery, 1))
         val wrappedSelf = WrappedKeyDto(1, CloudCrypto.wrapForDevice(vk, keys.encPublic, deviceId, 1))
         if (settings.getString(K_RESET) == "true") api().vaultReset(wrappedRecovery, wrappedSelf) else api().vaultInit(wrappedRecovery, wrappedSelf)
+        // "Remind me later": keep the key (Keystore-encrypted, like every secret here) until the user saves it.
+        if (remindLater) putSecret(K_RECOVERY_REMINDER, recovery)
         recovery.fill(0)
         settings.deletePrefix(K_PENDING_RECOVERY)
         settings.deletePrefix(K_RESET)
@@ -126,7 +184,7 @@ class CloudRepository @Inject constructor(
     /** Polls the server for keys a trusted device has wrapped for us. */
     suspend fun checkApproval(): CloudState = io {
         val keys = loadDeviceKeys() ?: return@io refresh()
-        val deviceId = devices.localDeviceId()
+        val deviceId = cloudDeviceId()
         val wrapped = try {
             api().myKeys()
         } catch (e: CloudHttpException) {
@@ -153,7 +211,7 @@ class CloudRepository @Inject constructor(
     suspend fun recover(recoveryText: String): CloudState = io {
         val recovery = CloudCrypto.parseRecoveryKey(recoveryText) ?: throw IllegalArgumentException("That is not a valid recovery key.")
         val keys = loadDeviceKeys()!!
-        val deviceId = devices.localDeviceId()
+        val deviceId = cloudDeviceId()
         val vaultKeys = try {
             api().recoveryKeys().associate { it.keyVersion to CloudCrypto.unwrapForRecovery(it.wrappedKey, recovery, it.keyVersion) }
         } catch (e: java.security.GeneralSecurityException) {
@@ -167,7 +225,7 @@ class CloudRepository @Inject constructor(
     }
 
     suspend fun pendingApprovals(): List<PendingApproval> = io {
-        api().pendingDevices().map { PendingApproval(it.id, it.name, CloudCrypto.safetyCode(it.encPublic, it.signPublic), it.encPublic) }
+        api().pendingDevices().map { PendingApproval(it.id, it.name, CloudCrypto.safetyCode(it.encPublic, it.signPublic), it.encPublic, it.signPublic) }
     }
 
     /** Call only after the user confirmed both screens show the same safety code. */
@@ -228,7 +286,7 @@ class CloudRepository @Inject constructor(
         val version = settings.getString(K_VK_CURRENT)?.toIntOrNull() ?: return@io null
         UploadContext(
             api = api(),
-            deviceId = devices.localDeviceId(),
+            deviceId = cloudDeviceId(),
             keyVersion = version,
             vaultKey = secret(vkKey(version)) ?: return@io null,
             signPrivate = secret(K_SIGN_PRIVATE) ?: return@io null,
@@ -246,6 +304,7 @@ class CloudRepository @Inject constructor(
             AppLog.i(TAG, "queued initial snapshot of $queued recent messages")
         }
         scheduler.scheduleSync()
+        approveRememberedScan()
         return refresh()
     }
 
@@ -302,6 +361,12 @@ class CloudRepository @Inject constructor(
         settings.putString(K_VK_CURRENT, keys.keys.max().toString())
     }
 
+    /**
+     * The id this phone uses on the server. It starts as the archive's device id (so phones connected
+     * before this existed keep theirs) and changes only when that id belongs to another account.
+     */
+    private suspend fun cloudDeviceId(): String = settings.getString(K_CLOUD_DEVICE_ID) ?: devices.localDeviceId()
+
     private suspend fun api(): CloudApi = CloudApi(settings.getString(K_SERVER)!!, secret(K_TOKEN)?.let { String(it) })
 
     private suspend fun loadDeviceKeys(): DeviceKeys? {
@@ -332,6 +397,8 @@ class CloudRepository @Inject constructor(
         const val K_PENDING_RECOVERY = "cloud.pending_recovery"
         const val K_RESET = "cloud.reset_pending"
         const val K_HISTORY_FROM = "cloud.history_from"
+        const val K_SCAN_APPROVAL = "cloud.scan_approval"
+        const val K_RECOVERY_REMINDER = "cloud.recovery_reminder"
         const val K_FULL_HISTORY = "cloud.full_history"
 
         /** The first upload covers the latest day; the rest of the archive only on request. */
@@ -339,6 +406,7 @@ class CloudRepository @Inject constructor(
         // Outside PREFIX on purpose: they survive a disconnect.
         const val K_REVOKED_NOTICE = "cloudnotice.revoked"
         const val K_LAST_SERVER = "cloudnotice.last_server"
+        const val K_CLOUD_DEVICE_ID = "cloudnotice.device_id"
         const val K_CAN_START_OVER = "cloud.can_start_over"
         fun vkKey(version: Int) = "cloud.vk.$version"
         fun b64(bytes: ByteArray): String = Base64.getEncoder().encodeToString(bytes)

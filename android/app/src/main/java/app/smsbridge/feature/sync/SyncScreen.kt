@@ -59,6 +59,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import app.smsbridge.data.cloud.PairLinks
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 
 @HiltViewModel
 class SyncViewModel @Inject constructor(
@@ -66,6 +69,7 @@ class SyncViewModel @Inject constructor(
     pendingSync: PendingSyncRepository,
     private val settings: AppSettingsRepository,
     private val scheduler: SyncScheduler,
+    private val navigationRequests: app.smsbridge.ui.NavigationRequests,
 ) : ViewModel() {
     val state: StateFlow<CloudState> = cloud.state
     val pending: StateFlow<Int> = pendingSync.pendingCount.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
@@ -122,9 +126,37 @@ class SyncViewModel @Inject constructor(
         }
     }
 
-    fun connect(server: String, code: String) = run {
-        cloud.connect(server, code)
+    private val _info = MutableStateFlow<String?>(null)
+    val info: StateFlow<String?> = _info.asStateFlow()
+    private val _recoveryReminder = MutableStateFlow<String?>(null)
+    val recoveryReminder: StateFlow<String?> = _recoveryReminder.asStateFlow()
+
+    fun connect(server: String, code: String) {
+        // A pasted dashboard link works like a scan.
+        if (server.trim().startsWith("smsbridge://")) return onScanned(server)
+        run {
+            cloud.connect(server, code)
+            _wasRevoked.value = false
+        }
+    }
+
+    /** A QR code from the dashboard: connect and/or approve the browser it names. */
+    fun onScanned(text: String) = run {
+        _info.value = null
+        val link = PairLinks.parse(text) ?: throw IllegalArgumentException("That is not an SMS Bridge QR code. Scan the one shown on your dashboard.")
+        _info.value = cloud.handleLink(link)
         _wasRevoked.value = false
+        _recoveryReminder.value = cloud.recoveryReminder()
+    }
+
+    fun loadRecoveryReminder() = viewModelScope.launch { _recoveryReminder.value = cloud.recoveryReminder() }
+    fun dismissRecoveryReminder() = viewModelScope.launch {
+        cloud.dismissRecoveryReminder()
+        _recoveryReminder.value = null
+    }
+    fun confirmRecoveryLater() = run {
+        cloud.confirmRecoverySaved(remindLater = true)
+        _recoveryReminder.value = cloud.recoveryReminder()
     }
     fun confirmRecoverySaved() = run { cloud.confirmRecoverySaved() }
     fun checkApproval() = run { cloud.checkApproval() }
@@ -150,6 +182,13 @@ class SyncViewModel @Inject constructor(
             if (!paused) scheduler.scheduleSync()
         }
     }
+
+    // Last, so every property above is initialised: a pairing link opened on this phone acts like a scan.
+    init {
+        viewModelScope.launch {
+            navigationRequests.pairLink.collect { if (it != null) navigationRequests.takePairLink()?.let(::onScanned) }
+        }
+    }
 }
 
 @Composable
@@ -157,6 +196,7 @@ fun SyncScreen(viewModel: SyncViewModel = hiltViewModel()) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val busy by viewModel.busy.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
+    val info by viewModel.info.collectAsStateWithLifecycle()
 
     LazyColumn(Modifier.imePadding(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { Text("Cloud sync", style = MaterialTheme.typography.headlineSmall) }
@@ -168,15 +208,17 @@ fun SyncScreen(viewModel: SyncViewModel = hiltViewModel()) {
             )
         }
         error?.let { item { Text(it, color = MaterialTheme.colorScheme.error) } }
+        info?.let { item { Text(it, color = MaterialTheme.colorScheme.primary) } }
         when (val s = state) {
             CloudState.NotConnected -> item {
                 val revoked by viewModel.wasRevoked.collectAsStateWithLifecycle()
                 val lastServer by viewModel.lastServer.collectAsStateWithLifecycle()
-                ConnectCard(busy, revoked, lastServer, viewModel::connect)
+                ConnectCard(busy, revoked, lastServer, viewModel::connect, viewModel::onScanned)
             }
-            is CloudState.NeedsRecoverySetup -> item { RecoveryKeyCard(s.recoveryKey, busy, viewModel::confirmRecoverySaved) }
+            is CloudState.NeedsRecoverySetup -> item { RecoveryKeyCard(s.recoveryKey, busy, viewModel::confirmRecoverySaved, viewModel::confirmRecoveryLater) }
             is CloudState.WaitingForApproval -> item { WaitingCard(s, busy, viewModel) }
             is CloudState.Ready -> {
+                item { RecoveryReminderCard(viewModel) }
                 item { ConnectedCard(s, viewModel) }
                 item { ApprovalsCard(viewModel, busy) }
             }
@@ -185,9 +227,11 @@ fun SyncScreen(viewModel: SyncViewModel = hiltViewModel()) {
 }
 
 @Composable
-private fun ConnectCard(busy: Boolean, wasRevoked: Boolean, lastServer: String, onConnect: (String, String) -> Unit) {
+private fun ConnectCard(busy: Boolean, wasRevoked: Boolean, lastServer: String, onConnect: (String, String) -> Unit, onScanned: (String) -> Unit) {
     var server by rememberSaveable(lastServer) { mutableStateOf(lastServer) }
     var code by rememberSaveable { mutableStateOf("") }
+    var manual by rememberSaveable { mutableStateOf(false) }
+    val scan = rememberQrScanner(onScanned)
     SectionCard("Connect to your server") {
         if (wasRevoked) {
             Text(
@@ -199,32 +243,86 @@ private fun ConnectCard(busy: Boolean, wasRevoked: Boolean, lastServer: String, 
             )
         }
         Text(
-            "Sign in to your server in a browser, create a pairing code (valid 10 minutes), then enter it here. " +
-                "No password is typed on the phone.",
+            "Open your SMS Bridge dashboard in a browser, then scan the QR code it shows.",
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(top = 4.dp),
         )
-        OutlinedTextField(
-            value = server, onValueChange = { server = it }, label = { Text("Server address") },
-            placeholder = { Text("https://sms.example.org") }, singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-        )
-        OutlinedTextField(
-            value = code, onValueChange = { code = it }, label = { Text("Pairing code") },
-            placeholder = { Text("XXXXX-XXXXX") }, singleLine = true,
-            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters),
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-        )
-        Button(onClick = { onConnect(server, code) }, enabled = !busy && server.isNotBlank() && code.isNotBlank(), modifier = Modifier.padding(top = 8.dp)) {
-            Text(if (busy) "Connecting…" else "Connect")
+        Button(onClick = { scan("Scan the QR code on your SMS Bridge dashboard") }, enabled = !busy, modifier = Modifier.padding(top = 8.dp)) {
+            Text(if (busy) "Connecting…" else "Scan QR code")
         }
+        if (!manual) {
+            TextButton(onClick = { manual = true }) { Text("Enter the address and code instead") }
+        } else {
+            OutlinedTextField(
+                value = server, onValueChange = { server = it }, label = { Text("Server address") },
+                placeholder = { Text("https://sms.example.org") }, singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            )
+            OutlinedTextField(
+                value = code, onValueChange = { code = it }, label = { Text("Pairing code") },
+                placeholder = { Text("XXXXX-XXXXX") }, singleLine = true,
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters),
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            )
+            OutlinedButton(
+                onClick = { onConnect(server, code) },
+                enabled = !busy && server.isNotBlank() && (code.isNotBlank() || server.trim().startsWith("smsbridge://")),
+                modifier = Modifier.padding(top = 8.dp),
+            ) { Text("Connect") }
+        }
+    }
+}
+
+/** Opens the QR scanner; the scanned text goes to [onResult]. */
+@Composable
+private fun rememberQrScanner(onResult: (String) -> Unit): (String) -> Unit {
+    val launcher = androidx.activity.compose.rememberLauncherForActivityResult(ScanContract()) { result ->
+        result.contents?.let(onResult)
+    }
+    return { prompt ->
+        launcher.launch(
+            ScanOptions().setDesiredBarcodeFormats(ScanOptions.QR_CODE).setPrompt(prompt).setBeepEnabled(false).setOrientationLocked(false),
+        )
+    }
+}
+
+/** Shown until the user saves a recovery key they postponed. */
+@Composable
+private fun RecoveryReminderCard(viewModel: SyncViewModel) {
+    val key by viewModel.recoveryReminder.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) { viewModel.loadRecoveryReminder() }
+    val recovery = key ?: return
+    var show by rememberSaveable { mutableStateOf(false) }
+    SectionCard("Save your recovery key") {
+        Text(
+            "If you lose every phone, this key is the only way to read your server copy. Write it on paper.",
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+        if (show) {
+            SecureWindow()
+            Text(recovery, style = MaterialTheme.typography.headlineSmall, fontFamily = FontFamily.Monospace, modifier = Modifier.padding(vertical = 12.dp))
+            Button(onClick = viewModel::dismissRecoveryReminder) { Text("I have written it down") }
+        } else {
+            OutlinedButton(onClick = { show = true }, modifier = Modifier.padding(top = 8.dp)) { Text("Show recovery key") }
+        }
+    }
+}
+
+/** Blocks screenshots and the recents thumbnail while composed. */
+@Composable
+private fun SecureWindow() {
+    val activity = LocalContext.current.findActivity()
+    DisposableEffect(Unit) {
+        activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        onDispose { activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_SECURE) }
     }
 }
 
 /** Shown once. The window is marked secure so the key cannot be captured in screenshots or recents. */
 @Composable
-private fun RecoveryKeyCard(recoveryKey: String, busy: Boolean, onConfirm: () -> Unit) {
+private fun RecoveryKeyCard(recoveryKey: String, busy: Boolean, onConfirm: () -> Unit, onLater: () -> Unit) {
     val activity = LocalContext.current.findActivity()
     DisposableEffect(Unit) {
         activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
@@ -248,6 +346,7 @@ private fun RecoveryKeyCard(recoveryKey: String, busy: Boolean, onConfirm: () ->
             Text("I have written down the recovery key")
         }
         Button(onClick = onConfirm, enabled = saved && !busy) { Text(if (busy) "Setting up…" else "Continue") }
+        TextButton(onClick = onLater, enabled = !busy) { Text("Remind me later") }
     }
 }
 
@@ -326,6 +425,8 @@ private fun ConnectedCard(state: CloudState.Ready, viewModel: SyncViewModel) {
             Text("Pause sync")
             Switch(checked = paused, onCheckedChange = viewModel::setPaused)
         }
+        val scan = rememberQrScanner(viewModel::onScanned)
+        Button(onClick = { scan("Scan the QR code your browser shows") }, modifier = Modifier.padding(top = 8.dp)) { Text("Scan to approve a browser") }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = viewModel::syncNow, enabled = !paused) { Text("Sync now") }
             TextButton(onClick = { confirmDisconnect = true }) { Text("Disconnect") }

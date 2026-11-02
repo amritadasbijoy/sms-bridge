@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { PairQr } from "@/components/pair-qr";
 import { Shell } from "@/components/shell";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -12,6 +13,7 @@ export default function Devices() {
   const [code, setCode] = useState<{ code: string; expiresAt: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
+  const [showQr, setShowQr] = useState(false);
 
   const load = useCallback(() => {
     api.devices().then(setDevices, (e) => setError(e instanceof ApiError ? e.message : "Could not load devices."));
@@ -45,18 +47,30 @@ export default function Devices() {
           <CardHeader>
             <CardTitle>Connect a phone</CardTitle>
             <CardDescription>
-              In the SMS Bridge app open Sync → Connect, enter this server address and the one-time code. The code works once
-              and expires after 10 minutes.
+              On the phone: SMS Bridge → Sync → Scan QR code. A phone that was connected before must be disconnected
+              first (Sync → Disconnect).
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            {code && (
-              <div className="rounded-md border bg-muted px-4 py-3">
-                <p className="font-mono text-2xl tracking-widest">{code.code}</p>
-                <p className="text-xs text-muted-foreground">Expires {formatDateTime(code.expiresAt)}</p>
-              </div>
+            {showQr ? (
+              <PairQr withCode />
+            ) : (
+              <Button onClick={() => setShowQr(true)}>Show QR code</Button>
             )}
-            <Button onClick={newCode}>{code ? "New code" : "Create pairing code"}</Button>
+            <details className="text-sm">
+              <summary className="cursor-pointer text-muted-foreground">Enter a code by hand instead</summary>
+              <div className="mt-2 space-y-2">
+                {code && (
+                  <div className="rounded-md border bg-muted px-4 py-3">
+                    <p className="font-mono text-2xl tracking-widest">{code.code}</p>
+                    <p className="text-xs text-muted-foreground">
+                      Server {typeof window !== "undefined" ? window.location.origin : ""} · expires {formatDateTime(code.expiresAt)}
+                    </p>
+                  </div>
+                )}
+                <Button variant="outline" onClick={newCode}>{code ? "New code" : "Create pairing code"}</Button>
+              </div>
+            </details>
           </CardContent>
         </Card>
 

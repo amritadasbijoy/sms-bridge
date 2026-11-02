@@ -1,16 +1,20 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, ApiError, type Me, type StoredEvent } from "./api";
 import { deviceSafetyCode, ensureDevice, fetchVaultKeys, forgetLocal } from "./browser-device";
+import { deviceFingerprint } from "./pair";
 import { base64ToBytes, decryptEvent, parseRecoveryKey, unlockVaultKey } from "./crypto";
 import { buildMessages, type DecryptedEvent, type EventPayload, type MessageStore } from "./messages";
 
 type VaultState =
   | { status: "locked" }
   | { status: "connecting" }
-  /** No phone has turned on sync for this account yet, so there is nothing to open. */
-  | { status: "empty" }
+
   /** This browser waits for a phone to approve it; the phone must show the same code. */
-  | { status: "approval"; safetyCode: string; noApprovedPhone: boolean }
+  /**
+   * This browser waits for a phone to approve it (by scanning its QR code). [noApprovedPhone]: no phone
+   * is connected and approved yet, so the QR also carries a pairing code to connect one.
+   */
+  | { status: "approval"; safetyCode: string; deviceId: string; fingerprint: string; noApprovedPhone: boolean }
   | { status: "unlocking" }
   | { status: "loading"; loaded: number }
   | { status: "ready" };
@@ -173,7 +177,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setVault({ status: "connecting" });
     try {
       const info = await api.browserVault();
-      if (!info.exists) return setVault({ status: "empty" });
       const device = await ensureDevice(me.userId);
       deviceId.current = device.deviceId;
       const result = await fetchVaultKeys(device);
@@ -182,7 +185,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         // Revoked on the Devices page: start over with a fresh key and a new approval.
         return await openWithBrowser();
       }
-      setVault({ status: "approval", safetyCode: await deviceSafetyCode(device), noApprovedPhone: info.approvedPhones === 0 });
+      setVault({
+        status: "approval",
+        safetyCode: await deviceSafetyCode(device),
+        deviceId: device.deviceId,
+        fingerprint: await deviceFingerprint(device.encPublic, device.signPublic),
+        noApprovedPhone: !info.exists || info.approvedPhones === 0,
+      });
     } catch (e) {
       keys.current = new Map();
       setVault({ status: "locked" });
@@ -212,7 +221,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         } else {
           // Keep the hint current (e.g. once the phone starts over, it can approve this browser).
           const info = await api.browserVault();
-          const noApprovedPhone = info.approvedPhones === 0;
+          const noApprovedPhone = !info.exists || info.approvedPhones === 0;
           setVault((v) => (v.status === "approval" && v.noApprovedPhone !== noApprovedPhone ? { ...v, noApprovedPhone } : v));
         }
       } catch {

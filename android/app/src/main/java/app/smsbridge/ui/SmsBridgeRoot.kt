@@ -60,6 +60,7 @@ fun SmsBridgeRoot(navigationRequests: NavigationRequests) {
         when (val request = pending) {
             is NavRequest.OpenThread -> navController.navigate(Routes.thread(request.addressKey)) { launchSingleTop = true }
             is NavRequest.Compose -> navController.navigate(Routes.compose(request.recipient, request.body))
+            NavRequest.OpenSync -> navController.navigateTopLevel(Routes.SYNC)
             null -> return@LaunchedEffect
         }
         navigationRequests.consume()

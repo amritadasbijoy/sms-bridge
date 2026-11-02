@@ -8,7 +8,7 @@ import { api, ApiError } from "./api";
 import { base64ToBytes, safetyCode, type Bytes } from "./crypto";
 import { hpkeOpen, wrapContext } from "./hpke";
 
-interface DeviceRecord {
+export interface DeviceRecord {
   userId: string;
   deviceId: string;
   encKeys: CryptoKeyPair;
