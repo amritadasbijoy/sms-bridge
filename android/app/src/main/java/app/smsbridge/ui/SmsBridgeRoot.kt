@@ -61,6 +61,7 @@ fun SmsBridgeRoot(navigationRequests: NavigationRequests) {
             is NavRequest.OpenThread -> navController.navigate(Routes.thread(request.addressKey)) { launchSingleTop = true }
             is NavRequest.Compose -> navController.navigate(Routes.compose(request.recipient, request.body))
             NavRequest.OpenSync -> navController.navigateTopLevel(Routes.SYNC)
+            NavRequest.OpenRemote -> navController.navigate(Routes.REMOTE) { launchSingleTop = true }
             null -> return@LaunchedEffect
         }
         navigationRequests.consume()
@@ -102,7 +103,8 @@ fun SmsBridgeRoot(navigationRequests: NavigationRequests) {
             }
             composable(Routes.BACKUP) { BackupScreen() }
             composable(Routes.TRANSFER) { TransferScreen() }
-            composable(Routes.SYNC) { SyncScreen() }
+            composable(Routes.SYNC) { SyncScreen(onOpenRemote = { navController.navigate(Routes.REMOTE) { launchSingleTop = true } }) }
+            composable(Routes.REMOTE) { app.smsbridge.feature.remote.RemoteMessagesScreen() }
             composable(Routes.SETTINGS) { SettingsScreen() }
             composable(
                 Routes.THREAD,

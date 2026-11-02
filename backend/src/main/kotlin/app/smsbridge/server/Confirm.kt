@@ -71,6 +71,13 @@ class ConfirmService(private val db: Db, private val notices: Notices) {
         notices.bump(userId)
     }
 
+    /** A waiting phone asks the account's approved phones to confirm it by number. */
+    suspend fun requestConfirmSelf(d: DeviceContext) {
+        if (d.trusted) throw ApiException(HttpStatusCode.Conflict, "already_trusted", "This phone is already approved.")
+        db.tx { update("UPDATE devices SET confirm_requested_at = now(), confirm_salt = NULL WHERE id = ?", d.deviceId) }
+        notices.bump(d.userId)
+    }
+
     /** A trusted phone sets its random challenge for a requesting browser (any time it opens the prompt). */
     suspend fun setChallenge(d: DeviceContext, target: UUID, salt: String) {
         val bytes = runCatching { unb64.decode(salt) }.getOrNull()?.takeIf { it.size == 16 }
@@ -199,6 +206,10 @@ fun Route.confirmRoutes(auth: AuthService, sync: SyncService, notices: Notices, 
     post("/browser/devices/{id}/confirm") {
         val user = auth.requireUser(call)
         confirm.requestConfirm(user.first, call.uuidParam())
+        call.respond(HttpStatusCode.NoContent)
+    }
+    post("/vault/confirm") {
+        confirm.requestConfirmSelf(sync.device(call))
         call.respond(HttpStatusCode.NoContent)
     }
     post("/vault/requests/{id}/challenge") {

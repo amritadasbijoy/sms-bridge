@@ -21,6 +21,7 @@ import dagger.hilt.components.SingletonComponent
 import java.io.IOException
 import java.util.Base64
 import java.util.UUID
+import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
@@ -51,10 +52,14 @@ data class PendingApproval(
     internal val signPublic: ByteArray = ByteArray(0),
     /** The browser asked to be confirmed by number on a phone. */
     val confirmRequested: Boolean = false,
+    val isPhone: Boolean = false,
 )
 
 /** An open number-matching prompt on this phone. */
 data class ConfirmPrompt(val request: PendingApproval, val options: List<Int>, internal val correct: Int)
+
+/** A new SMS received by another phone on the account (listener mode). */
+data class RemoteSms(val deviceName: String, val address: String?, val body: String, val date: Long)
 
 /** This phone waits for its owner to tap [number] in the browser. */
 data class ConnectWait(val server: String, val requestId: String, val secret: String, val number: Int)
@@ -189,6 +194,16 @@ class CloudRepository @Inject constructor(
         }
     }
 
+    /** This waiting phone asks to be confirmed by number on an approved phone. */
+    suspend fun requestConfirmSelf() = io { api().requestConfirm() }
+
+    /** The number this waiting phone shows once an approved phone opened the prompt; null until then. */
+    suspend fun myConfirmNumber(): Int? = io {
+        val salt = api().vaultStatus().challenge ?: return@io null
+        val keys = loadDeviceKeys() ?: return@io null
+        ConfirmNumbers.number(salt, PairLinks.fingerprint(keys.encPublic, keys.signPublic))
+    }
+
     /** Asks to join [username]'s account without a QR code; the owner then taps [ConnectWait.number] in the browser. */
     suspend fun requestConnect(serverUrl: String, username: String): ConnectWait = io {
         val server = CloudApi.normalize(serverUrl)
@@ -217,6 +232,76 @@ class CloudRepository @Inject constructor(
 
     /** Waits (up to [timeoutSeconds]) for any change on the account; returns the new counter. */
     suspend fun waitForNews(after: Long, timeoutSeconds: Int): Long = io { api().waitForNews(after, timeoutSeconds) }
+
+    // ---- Listener mode -----------------------------------------------------------------------
+
+    private val remoteLock = kotlinx.coroutines.sync.Mutex()
+
+    suspend fun isListening(): Boolean = settings.getString(K_LISTEN) == "true"
+
+    /** Turns listener mode on (fetching what is already on the server) or off (forgetting it on this phone). */
+    suspend fun setListening(on: Boolean) = io {
+        if (on) {
+            settings.putString(K_LISTEN, "true")
+            pullRemote()
+        } else {
+            settings.deletePrefix(K_LISTEN)
+            settings.deletePrefix(K_REMOTE_AFTER)
+            db.remoteMessageDao().clear()
+        }
+        Unit
+    }
+
+    /**
+     * Downloads and decrypts new events from the account's other phones into the remote list.
+     * Returns SMS received by them that are new to this phone (for notifications).
+     */
+    suspend fun pullRemote(): List<RemoteSms> = io {
+        if (!isListening() || refresh() !is CloudState.Ready) return@io emptyList()
+        remoteLock.withLock {
+            val me = cloudDeviceId()
+            val api = api()
+            val names by lazy { runCatching { api.accountDevices() }.getOrDefault(emptyMap()) }
+            val keys = HashMap<Int, ByteArray?>()
+            val dao = db.remoteMessageDao()
+            val fresh = mutableListOf<RemoteSms>()
+            var after = settings.getString(K_REMOTE_AFTER)?.toLongOrNull() ?: 0L
+            try {
+                while (true) {
+                    val page = api.events(after, 500)
+                    if (page.isEmpty()) break
+                    for (e in page) {
+                        if (e.deviceId == me) continue
+                        val vk = keys.getOrPut(e.keyVersion) { secret(vkKey(e.keyVersion)) } ?: continue
+                        val json = runCatching {
+                            org.json.JSONObject(String(CloudCrypto.decryptEvent(vk, e.ciphertext, e.eventId, e.deviceId, e.deviceSequence, e.keyVersion), Charsets.UTF_8))
+                        }.getOrNull() ?: continue // tampered or not ours: never shown
+                        val type = json.optString("type")
+                        val messageId = json.optString("messageId").takeIf { it.isNotEmpty() && it != "null" } ?: continue
+                        if (type !in REMOTE_TYPES || !json.has("body")) continue
+                        val key = "${e.deviceId}:$messageId"
+                        val previous = dao.sequenceOf(key)
+                        if (previous != null && previous >= e.serverSequence) continue
+                        val address = json.optString("address").takeIf { it.isNotEmpty() && it != "null" }
+                        val box = json.optString("box", "UNKNOWN")
+                        dao.upsert(
+                            app.smsbridge.core.database.entity.RemoteMessageEntity(
+                                key, e.deviceId, address, json.getString("body"), json.optLong("date"), box, e.serverSequence,
+                            ),
+                        )
+                        if (previous == null && box == "INBOX") {
+                            fresh += RemoteSms(names[e.deviceId] ?: "another phone", address, json.getString("body"), json.optLong("date"))
+                        }
+                    }
+                    after = page.last().serverSequence
+                    settings.putString(K_REMOTE_AFTER, after.toString())
+                }
+            } finally {
+                keys.values.forEach { it?.fill(0) }
+            }
+            fresh
+        }
+    }
 
     /** A browser scanned before this phone was approved: approve it now (best effort). */
     private suspend fun approveRememberedScan() {
@@ -293,7 +378,7 @@ class CloudRepository @Inject constructor(
 
     suspend fun pendingApprovals(): List<PendingApproval> = io {
         api().pendingDevices().map {
-            PendingApproval(it.id, it.name, CloudCrypto.safetyCode(it.encPublic, it.signPublic), it.encPublic, it.signPublic, it.confirmRequested)
+            PendingApproval(it.id, it.name, CloudCrypto.safetyCode(it.encPublic, it.signPublic), it.encPublic, it.signPublic, it.confirmRequested, it.platform != "web")
         }
     }
 
@@ -467,6 +552,9 @@ class CloudRepository @Inject constructor(
         const val K_RESET = "cloud.reset_pending"
         const val K_HISTORY_FROM = "cloud.history_from"
         const val K_SCAN_APPROVAL = "cloud.scan_approval"
+        const val K_LISTEN = "cloud.listen"
+        const val K_REMOTE_AFTER = "cloud.remote_after"
+        private val REMOTE_TYPES = setOf("SMS_RECEIVED", "SMS_SENT", "SMS_STATUS_CHANGED", "SMS_IMPORTED")
         const val K_RECOVERY_REMINDER = "cloud.recovery_reminder"
         const val K_FULL_HISTORY = "cloud.full_history"
 

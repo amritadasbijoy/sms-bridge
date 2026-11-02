@@ -31,6 +31,8 @@ import kotlinx.serialization.Serializable
     val deviceTrusted: Boolean,
     /** Approved devices on this account; 0 with an existing vault means only the recovery key or a reset can help. */
     val approvedDevices: Int = 0,
+    /** Number matching: the approving phone's challenge for this (waiting) device, once set. */
+    val challenge: String? = null,
 )
 @Serializable data class WrappedKey(val keyVersion: Int, val wrappedKey: String)
 @Serializable data class VaultInit(val recoveryKeys: List<WrappedKey>, val selfKeys: List<WrappedKey>)
@@ -42,6 +44,7 @@ import kotlinx.serialization.Serializable
     val confirmRequested: Boolean = false,
 )
 @Serializable data class Approve(val keys: List<WrappedKey>)
+@Serializable data class AccountDevice(val id: String, val name: String, val platform: String)
 @Serializable data class UploadEvent(val eventId: String, val deviceSequence: Long, val keyVersion: Int, val ciphertext: String, val signature: String)
 @Serializable data class UploadBatch(val events: List<UploadEvent>)
 @Serializable data class Ack(val eventId: String, val serverSequence: Long)
@@ -107,7 +110,10 @@ class SyncService(private val db: Db, private val wake: Notices = Notices()) {
 
     suspend fun status(d: DeviceContext): VaultStatus = db.tx {
         val version = query("SELECT current_version FROM vaults WHERE user_id = ?", d.userId) { it.getInt(1) }.singleOrNull()
-        VaultStatus(version != null, version, d.trusted, approvedDevices(d.userId))
+        val challenge = query("SELECT confirm_salt FROM devices WHERE id = ? AND confirm_requested_at IS NOT NULL", d.deviceId) {
+            it.getBytes(1)?.let(b64e::encodeToString)
+        }.singleOrNull()
+        VaultStatus(version != null, version, d.trusted, approvedDevices(d.userId), challenge)
     }
 
     /**
@@ -197,6 +203,15 @@ class SyncService(private val db: Db, private val wake: Notices = Notices()) {
                     it.uuid("id").toString(), it.getString("name"), it.getString("platform"), it.getString("enc_public_key"),
                     it.getString("sign_public_key"), it.time("created_at").toString(), it.time("confirm_requested_at") != null,
                 )
+            }
+        }
+    }
+
+    suspend fun accountDevices(d: DeviceContext): List<AccountDevice> {
+        d.requireTrusted()
+        return db.tx {
+            query("SELECT id, name, platform FROM devices WHERE user_id = ? AND revoked_at IS NULL ORDER BY created_at", d.userId) {
+                AccountDevice(it.uuid("id").toString(), it.getString("name"), it.getString("platform"))
             }
         }
     }
@@ -322,6 +337,8 @@ fun Route.vaultAndSyncRoutes(auth: AuthService, sync: SyncService) {
             call.respond(HttpStatusCode.NoContent)
         }
         get("/requests") { call.respond(sync.pending(sync.device(call))) }
+        // Names of the account's devices, for an approved phone showing messages from the others.
+        get("/devices") { call.respond(sync.accountDevices(sync.device(call))) }
         post("/requests/{id}/approve") {
             val d = sync.device(call)
             val target = runCatching { UUID.fromString(call.parameters["id"]) }.getOrNull()

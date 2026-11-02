@@ -72,6 +72,7 @@ class SyncViewModel @Inject constructor(
     private val scheduler: SyncScheduler,
     private val navigationRequests: app.smsbridge.ui.NavigationRequests,
     @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context,
+    private val db: app.smsbridge.core.database.SmsBridgeDatabase,
 ) : ViewModel() {
     val state: StateFlow<CloudState> = cloud.state
     val pending: StateFlow<Int> = pendingSync.pendingCount.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
@@ -192,6 +193,37 @@ class SyncViewModel @Inject constructor(
 
     fun cancelConnectWait() { _connectWait.value = null }
 
+    // ---- Listener mode ----
+    private val _listening = MutableStateFlow(false)
+    val listening: StateFlow<Boolean> = _listening.asStateFlow()
+    val remoteCount: StateFlow<Int> = db.remoteMessageDao().observeCount().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+
+    fun loadListening() = viewModelScope.launch { _listening.value = cloud.isListening() }
+    fun setListening(on: Boolean) = run {
+        cloud.setListening(on)
+        _listening.value = cloud.isListening()
+    }
+
+    /** null = not asked; 0 = asked, waiting for the approving phone; otherwise the number to show. */
+    private val _selfConfirm = MutableStateFlow<Int?>(null)
+    val selfConfirm: StateFlow<Int?> = _selfConfirm.asStateFlow()
+
+    /** This waiting phone asks to be confirmed by number, then shows its number and waits for approval. */
+    fun confirmSelfByNumber() = run {
+        cloud.requestConfirmSelf()
+        _selfConfirm.value = 0
+        viewModelScope.launch {
+            while (_selfConfirm.value != null && cloud.state.value is CloudState.WaitingForApproval) {
+                kotlinx.coroutines.delay(2_000)
+                runCatching {
+                    _selfConfirm.value = cloud.myConfirmNumber() ?: 0
+                    cloud.checkApproval()
+                }
+            }
+            _selfConfirm.value = null
+        }
+    }
+
     fun loadRecoveryReminder() = viewModelScope.launch { _recoveryReminder.value = cloud.recoveryReminder() }
     fun dismissRecoveryReminder() = viewModelScope.launch {
         cloud.dismissRecoveryReminder()
@@ -252,7 +284,7 @@ class SyncViewModel @Inject constructor(
 }
 
 @Composable
-fun SyncScreen(viewModel: SyncViewModel = hiltViewModel()) {
+fun SyncScreen(viewModel: SyncViewModel = hiltViewModel(), onOpenRemote: () -> Unit = {}) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val busy by viewModel.busy.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
@@ -270,6 +302,7 @@ fun SyncScreen(viewModel: SyncViewModel = hiltViewModel()) {
         error?.let { item { Text(it, color = MaterialTheme.colorScheme.error) } }
         info?.let { item { Text(it, color = MaterialTheme.colorScheme.primary) } }
         item { ConfirmNumberDialog(viewModel) }
+        item { app.smsbridge.feature.update.UpdateBanner() }
         when (val s = state) {
             CloudState.NotConnected -> {
                 item {
@@ -288,6 +321,7 @@ fun SyncScreen(viewModel: SyncViewModel = hiltViewModel()) {
                 item { RecoveryReminderCard(viewModel) }
                 item { StayReachableCard() }
                 item { ConnectedCard(s, viewModel) }
+                item { ListenCard(viewModel, onOpenRemote) }
                 item { ApprovalsCard(viewModel, busy) }
             }
         }
@@ -338,6 +372,33 @@ private fun ConnectCard(busy: Boolean, wasRevoked: Boolean, lastServer: String, 
                 enabled = !busy && server.isNotBlank() && (code.isNotBlank() || server.trim().startsWith("smsbridge://")),
                 modifier = Modifier.padding(top = 8.dp),
             ) { Text("Connect") }
+        }
+    }
+}
+
+/** Listener mode: show SMS from the account's other phones on this one, live. */
+@Composable
+private fun ListenCard(viewModel: SyncViewModel, onOpenRemote: () -> Unit) {
+    val listening by viewModel.listening.collectAsStateWithLifecycle()
+    val count by viewModel.remoteCount.collectAsStateWithLifecycle()
+    val busy by viewModel.busy.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) { viewModel.loadListening() }
+    SectionCard("Messages from your other phones") {
+        Row(
+            Modifier.fillMaxWidth().padding(top = 4.dp).toggleable(value = listening, role = Role.Switch, enabled = !busy, onValueChange = viewModel::setListening),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text("Receive SMS from my other phones", modifier = Modifier.weight(1f))
+            Switch(checked = listening, onCheckedChange = null)
+        }
+        Text(
+            if (listening) "New SMS on your other phones appear here and as notifications, even when SMS Bridge is closed."
+            else "Turn on for a phone you use to read messages from your other phones.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        if (listening) {
+            Button(onClick = onOpenRemote, modifier = Modifier.padding(top = 8.dp)) { Text("Open ($count)") }
         }
     }
 }
@@ -562,6 +623,17 @@ private fun WaitingCard(state: CloudState.WaitingForApproval, busy: Boolean, vie
         )
         Text(state.safetyCode, style = MaterialTheme.typography.displaySmall, fontFamily = FontFamily.Monospace, modifier = Modifier.padding(vertical = 8.dp))
         Button(onClick = viewModel::checkApproval, enabled = !busy) { Text(if (busy) "Checking…" else "I approved it, check now") }
+        val selfNumber by viewModel.selfConfirm.collectAsStateWithLifecycle()
+        when (val n = selfNumber) {
+            null -> OutlinedButton(onClick = viewModel::confirmSelfByNumber, enabled = !busy, modifier = Modifier.padding(top = 4.dp)) {
+                Text("Confirm with a number instead")
+            }
+            0 -> Text("Your approved phone got a notification. Open it there…", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 8.dp))
+            else -> {
+                Text("On your approved phone, tap:", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 8.dp))
+                Text("$n", style = MaterialTheme.typography.displayLarge, fontFamily = FontFamily.Monospace, modifier = Modifier.padding(vertical = 8.dp))
+            }
+        }
         Text("No other phone? Use your recovery key instead:", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 12.dp))
         OutlinedTextField(
             value = recovery, onValueChange = { recovery = it }, label = { Text("Recovery key") }, singleLine = true,

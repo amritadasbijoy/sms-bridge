@@ -99,7 +99,9 @@ over earlier ones if they are built with the same keystore, so keep a backup of 
 
 Publish a new build: raise `versionCode`/`versionName` in `android/app/build.gradle.kts`, run
 `./gradlew :app:assembleDebug`, copy the APK to `/opt/sms-bridge-downloads/sms-bridge-<version>.apk`
-and over `sms-bridge.apk`, and regenerate the `.sha256`.
+and over `sms-bridge.apk`, regenerate the `.sha256`, and update `latest.json`
+(`{"versionCode":8,"versionName":"0.6.0","url":"/download/sms-bridge-0.6.0.apk","sha256":"…"}`): installed
+apps read it (at most every 12 hours) and show "Update available".
 
 ## Backups
 

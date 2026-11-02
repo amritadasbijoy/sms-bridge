@@ -74,6 +74,9 @@ class CloudConnectionService : Service() {
                 asking.filter { it.deviceId !in notified }.forEach { notifyConfirm(it); notified += it.deviceId }
                 (notified - asking.map { it.deviceId }.toSet()).forEach { NotificationManagerCompat.from(this).cancel(it.hashCode()) }
                 notified.retainAll(asking.map { it.deviceId }.toSet())
+                // Listener mode: new SMS from the account's other phones, shown as they arrive.
+                val recent = System.currentTimeMillis() - 15 * 60_000L
+                cloud.pullRemote().filter { it.date >= recent }.forEach(::notifyRemote)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: CloudHttpException) {
@@ -108,14 +111,44 @@ class CloudConnectionService : Service() {
     private fun notifyConfirm(request: PendingApproval) {
         val n = NotificationCompat.Builder(this, CHANNEL_APPROVALS)
             .setSmallIcon(R.drawable.ic_stat_message)
-            .setContentTitle("${request.name} wants to open your messages")
-            .setContentText("Tap to confirm with the number shown in the browser.")
+            .setContentTitle(if (request.isPhone) "${request.name} wants to join" else "${request.name} wants to open your messages")
+            .setContentText("Tap to confirm with the number it shows.")
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
             .setContentIntent(openApp(request.deviceId))
             .build()
         runCatching { NotificationManagerCompat.from(this).notify(request.deviceId.hashCode(), n) }
+    }
+
+    private fun notifyRemote(sms: RemoteSms) {
+        val title = "${sms.address ?: "Unknown sender"} · via ${sms.deviceName}"
+        val public = NotificationCompat.Builder(this, CHANNEL_REMOTE)
+            .setSmallIcon(R.drawable.ic_stat_message)
+            .setContentTitle("New SMS on ${sms.deviceName}")
+            .build()
+        val n = NotificationCompat.Builder(this, CHANNEL_REMOTE)
+            .setSmallIcon(R.drawable.ic_stat_message)
+            .setContentTitle(title)
+            .setContentText(sms.body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(sms.body))
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(public)
+            .setAutoCancel(true)
+            .setWhen(sms.date)
+            .setContentIntent(openRemote())
+            .build()
+        runCatching { NotificationManagerCompat.from(this).notify(("remote:" + sms.date + sms.address).hashCode(), n) }
+    }
+
+    private fun openRemote(): PendingIntent {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            action = ACTION_OPEN_REMOTE
+        }
+        return PendingIntent.getActivity(this, 7, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     }
 
     private fun openApp(confirmDeviceId: String?): PendingIntent {
@@ -135,6 +168,8 @@ class CloudConnectionService : Service() {
         private const val WAIT_SECONDS = 25
         const val CHANNEL_CONNECTION = "connection"
         const val CHANNEL_APPROVALS = "approvals"
+        const val CHANNEL_REMOTE = "remote_sms"
+        const val ACTION_OPEN_REMOTE = "app.smsbridge.action.OPEN_REMOTE"
         const val ACTION_CONFIRM_DEVICE = "app.smsbridge.action.CONFIRM_DEVICE"
         const val EXTRA_DEVICE_ID = "device_id"
 
@@ -154,6 +189,12 @@ class CloudConnectionService : Service() {
             manager.createNotificationChannel(
                 NotificationChannel(CHANNEL_APPROVALS, "Approval requests", NotificationManager.IMPORTANCE_HIGH).apply {
                     description = "A browser asks to open your messages."
+                },
+            )
+            manager.createNotificationChannel(
+                NotificationChannel(CHANNEL_REMOTE, "SMS from your other phones", NotificationManager.IMPORTANCE_HIGH).apply {
+                    description = "New SMS received by your other phones (listener mode)."
+                    lockscreenVisibility = Notification.VISIBILITY_PRIVATE
                 },
             )
         }
