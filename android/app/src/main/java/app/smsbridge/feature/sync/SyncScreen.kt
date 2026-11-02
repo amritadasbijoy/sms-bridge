@@ -146,6 +146,10 @@ class SyncViewModel @Inject constructor(
     /** A QR code from the dashboard: connect and/or approve the browser it names. */
     fun onScanned(text: String) = run {
         _info.value = null
+        PairLinks.parseLogin(text)?.let { login ->
+            _info.value = "Signed in ${cloud.approveScannedLogin(login)}."
+            return@run
+        }
         val link = PairLinks.parse(text) ?: throw IllegalArgumentException("That is not an SMS Bridge QR code. Scan the one shown on your dashboard.")
         _info.value = cloud.handleLink(link)
         _wasRevoked.value = false
@@ -156,7 +160,9 @@ class SyncViewModel @Inject constructor(
     private val _confirm = MutableStateFlow<app.smsbridge.data.cloud.ConfirmPrompt?>(null)
     val confirm: StateFlow<app.smsbridge.data.cloud.ConfirmPrompt?> = _confirm.asStateFlow()
 
-    fun startConfirm(request: PendingApproval) = run { _confirm.value = cloud.startConfirm(request) }
+    fun startConfirm(request: PendingApproval) = run {
+        _confirm.value = if (request.loginRequestId != null) cloud.startLoginConfirm(request) else cloud.startConfirm(request)
+    }
 
     /** [picked] null = "none of these" (declines). */
     fun pickNumber(picked: Int?) = run {
@@ -271,9 +277,10 @@ class SyncViewModel @Inject constructor(
                 run {
                     val all = cloud.pendingApprovals()
                     _approvals.value = all
-                    val request = all.firstOrNull { it.deviceId == id }
-                        ?: throw IllegalArgumentException("That browser is no longer waiting for approval.")
-                    _confirm.value = cloud.startConfirm(request)
+                    val logins = cloud.loginAsks()
+                    _confirm.value = logins.firstOrNull { it.loginRequestId == id }?.let { cloud.startLoginConfirm(it) }
+                        ?: all.firstOrNull { it.deviceId == id }?.let { cloud.startConfirm(it) }
+                        ?: throw IllegalArgumentException("That request is no longer waiting.")
                 }
             }
         }
@@ -670,7 +677,7 @@ private fun ConnectedCard(state: CloudState.Ready, viewModel: SyncViewModel) {
             Switch(checked = paused, onCheckedChange = viewModel::setPaused)
         }
         val scan = rememberQrScanner(viewModel::onScanned)
-        Button(onClick = { scan("Scan the QR code your browser shows") }, modifier = Modifier.padding(top = 8.dp)) { Text("Scan to approve a browser") }
+        Button(onClick = { scan("Scan the QR code your browser shows") }, modifier = Modifier.padding(top = 8.dp)) { Text("Scan a browser's QR code") }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = viewModel::syncNow, enabled = !paused) { Text("Sync now") }
             TextButton(onClick = { confirmDisconnect = true }) { Text("Disconnect") }

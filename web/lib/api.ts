@@ -10,8 +10,8 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const headers: Record<string, string> = { Accept: "application/json" };
+async function request<T>(method: string, path: string, body?: unknown, extraHeaders: Record<string, string> = {}): Promise<T> {
+  const headers: Record<string, string> = { Accept: "application/json", ...extraHeaders };
   if (method !== "GET") headers["X-Requested-With"] = "SmsBridge";
   if (body !== undefined) headers["Content-Type"] = "application/json";
   const res = await fetch(`/api/v1${path}`, {
@@ -37,7 +37,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return data as T;
 }
 
-export interface Me { userId: string; username: string; totpEnabled: boolean }
+export interface Me { userId: string; username: string; totpEnabled: boolean; hasPassword: boolean }
+export interface LoginStatus { status: string; challenge?: string | null; deviceId?: string | null; userId?: string | null }
 export interface Device {
   id: string; name: string; platform: string; createdAt: string;
   lastSeenAt: string | null; revokedAt: string | null; vaultTrusted: boolean;
@@ -80,6 +81,20 @@ export const api = {
   rejectConnect: (id: string) => request<void>("POST", `/connect-requests/${encodeURIComponent(id)}/reject`, {}),
   invites: () => request<{ createdAt: string; expiresAt: string; used: boolean; usedAt: string | null }[]>("GET", "/invites"),
   createInvite: () => request<{ code: string; expiresAt: string }>("POST", "/invites", {}),
+  /** A new account without a password ("Get started"). */
+  start: (invite?: string) => request<Me>("POST", "/auth/start", invite ? { invite } : {}),
+  /** Asks to be signed in by a phone (QR), or by the phones of [username] (number). */
+  createLoginRequest: (name: string, encPublicKey: string, signPublicKey: string, username?: string) =>
+    request<{ requestId: string; secret: string; expiresAt: string }>("POST", "/auth/login-requests", {
+      name,
+      encPublicKey,
+      signPublicKey,
+      ...(username ? { username } : {}),
+    }),
+  loginStatus: (id: string, secret: string) =>
+    request<LoginStatus>("GET", `/auth/login-requests/${encodeURIComponent(id)}`, undefined, { "X-Request-Secret": secret }),
+  setPassword: (password: string, currentPassword?: string) =>
+    request<void>("POST", "/auth/password", { password, ...(currentPassword ? { currentPassword } : {}) }),
   registerWithInvite: (username: string, password: string, invite: string) =>
     request<Me>("POST", "/auth/register", { username, password, invite }),
 };

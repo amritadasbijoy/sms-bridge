@@ -15,6 +15,7 @@ data class WrappedKeyDto(val keyVersion: Int, val wrappedKey: ByteArray)
 data class VaultStatusDto(val exists: Boolean, val currentVersion: Int?, val trusted: Boolean, val approvedDevices: Int, val challenge: ByteArray? = null)
 data class PendingDeviceDto(val id: String, val name: String, val encPublic: ByteArray, val signPublic: ByteArray, val confirmRequested: Boolean = false, val platform: String = "android")
 data class StoredEventDto(val eventId: String, val deviceId: String, val deviceSequence: Long, val serverSequence: Long, val keyVersion: Int, val ciphertext: ByteArray)
+data class LoginAskDto(val id: String, val deviceId: String, val name: String, val encPublic: ByteArray, val signPublic: ByteArray)
 data class ConnectRequestDto(val requestId: String, val secret: String, val number: Int, val expiresAt: String)
 data class UploadEventDto(val eventId: String, val deviceSequence: Long, val keyVersion: Int, val ciphertext: ByteArray, val signature: ByteArray)
 
@@ -89,6 +90,28 @@ class CloudApi(baseUrl: String, private val token: String? = null) {
     fun accountDevices(): Map<String, String> {
         val array = callArray("GET", "/api/v1/vault/devices")
         return (0 until array.length()).associate { i -> array.getJSONObject(i).let { it.getString("id") to it.getString("name") } }
+    }
+
+    // ---- Signing browsers in ----
+    private fun loginAsk(o: JSONObject) = LoginAskDto(
+        o.getString("id"), o.getString("deviceId"), o.getString("name"), unb64(o.getString("encPublicKey")), unb64(o.getString("signPublicKey")),
+    )
+
+    fun loginRequest(id: String): LoginAskDto = loginAsk(call("GET", "/api/v1/vault/login-requests/$id"))
+
+    /** Sign-in requests that typed this account's username (confirmed by number). */
+    fun loginRequests(): List<LoginAskDto> = callArray("GET", "/api/v1/vault/login-requests").let { a -> List(a.length()) { loginAsk(a.getJSONObject(it)) } }
+
+    fun loginChallenge(id: String, salt: ByteArray) {
+        call("POST", "/api/v1/vault/login-requests/$id/challenge", JSONObject().put("salt", b64(salt)))
+    }
+
+    fun loginDecline(id: String) {
+        call("POST", "/api/v1/vault/login-requests/$id/decline", JSONObject())
+    }
+
+    fun loginApprove(id: String, keys: List<WrappedKeyDto>) {
+        call("POST", "/api/v1/vault/login-requests/$id/approve", JSONObject().put("keys", keys(keys)))
     }
 
     /** Number matching: the random challenge the browser turns into its number. */

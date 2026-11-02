@@ -31,7 +31,7 @@ import kotlinx.serialization.Serializable
     val username: String? = null,
 )
 @Serializable data class LoginRequestCreated(val requestId: String, val secret: String, val expiresAt: String)
-@Serializable data class LoginRequestStatus(val status: String, val challenge: String? = null, val deviceId: String? = null)
+@Serializable data class LoginRequestStatus(val status: String, val challenge: String? = null, val deviceId: String? = null, val userId: String? = null)
 @Serializable data class LoginRequestForPhone(
     val id: String, val deviceId: String, val name: String, val encPublicKey: String, val signPublicKey: String, val createdAt: String,
 )
@@ -74,15 +74,20 @@ class LoginRequestService(private val db: Db, private val auth: AuthService, pri
      */
     suspend fun poll(id: UUID, secret: String): Pair<LoginRequestStatus, String?> = db.tx {
         val row = query(
-            "SELECT status, challenge, session_token, device_id, expires_at < now() AS expired FROM login_requests WHERE id = ? AND secret_hash = ?",
+            "SELECT status, challenge, session_token, device_id, user_id, expires_at < now() AS expired FROM login_requests WHERE id = ? AND secret_hash = ?",
             id, Secrets.sha256(secret),
-        ) { listOf(it.getString("status"), it.getBytes("challenge")?.let(b64::encodeToString), it.getString("session_token"), it.uuid("device_id").toString(), it.getBoolean("expired")) }
+        ) {
+            listOf(
+                it.getString("status"), it.getBytes("challenge")?.let(b64::encodeToString), it.getString("session_token"),
+                it.uuid("device_id").toString(), it.getBoolean("expired"), it.getObject("user_id")?.toString(),
+            )
+        }
             .singleOrNull() ?: throw ApiException(HttpStatusCode.NotFound, "not_found", "Unknown request.")
         val status = row[0] as String
         when {
             status == "approved" && row[2] != null -> {
                 update("UPDATE login_requests SET status = 'delivered', session_token = NULL WHERE id = ?", id)
-                LoginRequestStatus("approved", deviceId = row[3] as String) to row[2] as String
+                LoginRequestStatus("approved", deviceId = row[3] as String, userId = row[5] as String?) to row[2] as String
             }
             status == "pending" && row[4] as Boolean -> LoginRequestStatus("expired") to null
             else -> LoginRequestStatus(status, challenge = row[1] as String?) to null

@@ -60,6 +60,7 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="smsbridge" android:host="pair" />
+                <data android:scheme="smsbridge" android:host="login" />
             </intent-filter>
             <!-- SMS role requirement: compose from sms:/smsto:/mms:/mmsto: links. -->
             <intent-filter>

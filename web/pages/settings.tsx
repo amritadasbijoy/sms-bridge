@@ -152,6 +152,64 @@ function Invites() {
   );
 }
 
+/** Username, and a password as a fallback for signing in without a phone. */
+function Account() {
+  const { me, refreshMe } = useSession();
+  const [password, setPassword] = useState("");
+  const [current, setCurrent] = useState("");
+  const [message, setMessage] = useState<{ tone: "info" | "error"; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  if (!me) return null;
+
+  async function save(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setMessage(null);
+    try {
+      await api.setPassword(password, me?.hasPassword ? current : undefined);
+      setPassword("");
+      setCurrent("");
+      await refreshMe();
+      setMessage({ tone: "info", text: "Password saved. You can also sign in with it when your phone is not at hand." });
+    } catch (err) {
+      setMessage({ tone: "error", text: err instanceof ApiError ? err.message : "Could not save the password." });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Account</CardTitle>
+        <CardDescription>
+          Username <span className="font-mono">{me.username}</span>. You sign in by scanning with your phone
+          {me.hasPassword ? " or with your password." : ". Add a password so you can still sign in if you lose the phone."}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={save} className="max-w-xs space-y-3">
+          {message && <Alert tone={message.tone}>{message.text}</Alert>}
+          {me.hasPassword && (
+            <div className="space-y-2">
+              <Label htmlFor="current-password">Current password</Label>
+              <Input id="current-password" type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} required />
+            </div>
+          )}
+          <div className="space-y-2">
+            <Label htmlFor="new-password">{me.hasPassword ? "New password" : "Password"}</Label>
+            <Input id="new-password" type="password" autoComplete="new-password" minLength={12} value={password} onChange={(e) => setPassword(e.target.value)} required />
+            <p className="text-xs text-muted-foreground">At least 12 characters.</p>
+          </div>
+          <Button type="submit" variant={me.hasPassword ? "outline" : "default"} disabled={busy}>
+            {me.hasPassword ? "Change password" : "Add a password"}
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
+  );
+}
+
 /** The invite as a link to send; opening it shows account creation with the code filled in. */
 function InviteLink({ code, expiresAt }: { code: string; expiresAt: string }) {
   const link = `${typeof window !== "undefined" ? window.location.origin : ""}/login/?invite=${encodeURIComponent(code)}`;
@@ -240,6 +298,7 @@ export default function Settings() {
   return (
     <Shell title="Settings">
       <div className="max-w-2xl space-y-6">
+        <Account />
         <Invites />
         <ThisBrowser />
         <TwoFactor />

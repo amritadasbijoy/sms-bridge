@@ -43,6 +43,18 @@ class PairLinkTest {
     }
 
     @Test
+    fun parsesSignInLinksAndRejectsBrokenOnes() {
+        val login = PairLinks.parseLogin("smsbridge://login?v=1&s=https%3A%2F%2Fsms.example.org&r=$device&f=$fpText")!!
+        assertEquals("https://sms.example.org", login.server)
+        assertEquals(device, login.requestId)
+        assertArrayEquals(fp, login.fingerprint)
+        assertNull(PairLinks.parseLogin("smsbridge://login?v=1&s=https%3A%2F%2Fx&r=$device")) // no fingerprint
+        assertNull(PairLinks.parseLogin("smsbridge://login?v=1&s=https%3A%2F%2Fx&r=nope&f=$fpText"))
+        assertNull(PairLinks.parseLogin("smsbridge://pair?v=1&s=https%3A%2F%2Fx&c=AB12C-DE34F")) // a pairing link is not a sign-in
+        assertNull(PairLinks.parse("smsbridge://login?v=1&s=https%3A%2F%2Fx&r=$device&f=$fpText"))
+    }
+
+    @Test
     fun fingerprintMatchesTheBrowsersAndOnlyTheseKeys() {
         // The same test keys as web/test/pair.test.ts; both sides must produce this value.
         val text = File("../../testdata/hpke-vectors-v1.json").readText()
