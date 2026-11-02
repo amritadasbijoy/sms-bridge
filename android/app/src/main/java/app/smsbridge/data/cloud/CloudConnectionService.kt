@@ -38,6 +38,7 @@ import kotlinx.coroutines.launch
 class CloudConnectionService : Service() {
 
     @Inject lateinit var cloud: CloudRepository
+    @Inject lateinit var updates: app.smsbridge.data.update.UpdateChecker
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var loop: Job? = null
@@ -65,11 +66,18 @@ class CloudConnectionService : Service() {
         var counter = -1L
         var backoffMs = 5_000L
         val notified = mutableSetOf<String>()
+        var notifiedVersion = 0
         while (scope.isActive) {
             try {
                 if (cloud.refresh() !is CloudState.Ready) break
-                counter = cloud.waitForNews(counter, WAIT_SECONDS)
+                val (newCounter, appVersion) = cloud.waitForNews(counter, WAIT_SECONDS)
+                counter = newCounter
                 backoffMs = 5_000L
+                // A new app version was published: tell the user once per version.
+                if (appVersion > app.smsbridge.BuildConfig.VERSION_CODE && appVersion != notifiedVersion) {
+                    updates.check(force = true)?.let { notifyUpdate(it) }
+                    notifiedVersion = appVersion
+                }
                 val asking = cloud.pendingApprovals().filter { it.confirmRequested } + cloud.loginAsks()
                 asking.filter { it.deviceId !in notified }.forEach { notifyConfirm(it); notified += it.deviceId }
                 (notified - asking.map { it.deviceId }.toSet()).forEach { NotificationManagerCompat.from(this).cancel(it.hashCode()) }
@@ -127,6 +135,22 @@ class CloudConnectionService : Service() {
         runCatching { NotificationManagerCompat.from(this).notify(request.deviceId.hashCode(), n) }
     }
 
+    private fun notifyUpdate(info: app.smsbridge.data.update.UpdateInfo) {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            action = ACTION_SHOW_UPDATE
+        }
+        val n = NotificationCompat.Builder(this, CHANNEL_UPDATES)
+            .setSmallIcon(R.drawable.ic_stat_message)
+            .setContentTitle("SMS Bridge ${info.versionName} is available")
+            .setContentText(if (info.required) "Required update. Tap to install." else "Tap to update.")
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .setContentIntent(PendingIntent.getActivity(this, 8, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
+            .build()
+        runCatching { NotificationManagerCompat.from(this).notify(ID_UPDATE, n) }
+    }
+
     private fun notifyRemote(sms: RemoteSms) {
         val title = "${sms.address ?: "Unknown sender"} · via ${sms.deviceName}"
         val public = NotificationCompat.Builder(this, CHANNEL_REMOTE)
@@ -175,6 +199,9 @@ class CloudConnectionService : Service() {
         const val CHANNEL_CONNECTION = "connection"
         const val CHANNEL_APPROVALS = "approvals"
         const val CHANNEL_REMOTE = "remote_sms"
+        const val CHANNEL_UPDATES = "updates"
+        const val ACTION_SHOW_UPDATE = "app.smsbridge.action.SHOW_UPDATE"
+        private const val ID_UPDATE = 7002
         const val ACTION_OPEN_REMOTE = "app.smsbridge.action.OPEN_REMOTE"
         const val ACTION_CONFIRM_DEVICE = "app.smsbridge.action.CONFIRM_DEVICE"
         const val EXTRA_DEVICE_ID = "device_id"
@@ -195,6 +222,11 @@ class CloudConnectionService : Service() {
             manager.createNotificationChannel(
                 NotificationChannel(CHANNEL_APPROVALS, "Approval requests", NotificationManager.IMPORTANCE_HIGH).apply {
                     description = "A browser asks to open your messages."
+                },
+            )
+            manager.createNotificationChannel(
+                NotificationChannel(CHANNEL_UPDATES, "App updates", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                    description = "A new version of SMS Bridge is available."
                 },
             )
             manager.createNotificationChannel(

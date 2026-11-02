@@ -27,3 +27,4 @@ signing.properties
 node_modules/
 .next/
 dist/
+infrastructure/downloads/

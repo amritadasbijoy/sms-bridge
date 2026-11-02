@@ -27,6 +27,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
     <!-- Lets the user exclude SMS Bridge from battery optimisation (asked once, from the Sync tab). -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Installs updates published on the user's own server (Android asks the user once). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Android 12+: once SMS Bridge installed its own current version, later updates may skip the confirmation. -->
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
     <!-- QR scanning for pairing (requested only when the user taps "Scan"). Camera is optional. -->
     <uses-feature
         android:name="android.hardware.camera"
@@ -96,6 +100,9 @@
             </intent-filter>
         </receiver>
 
+        <receiver
+            android:name=".data.update.UpdateInstallReceiver"
+            android:exported="false" />
         <service
             android:name=".data.cloud.CloudConnectionService"
             android:exported="false"

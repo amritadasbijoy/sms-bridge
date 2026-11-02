@@ -37,6 +37,12 @@ class NavigationRequests @Inject constructor() {
 
     fun takeConfirmDevice(): String? = _confirmDevice.value.also { _confirmDevice.value = null }
 
+    private val _showUpdate = MutableStateFlow(false)
+    /** The "update available" notification was tapped. */
+    val showUpdate: StateFlow<Boolean> = _showUpdate.asStateFlow()
+
+    fun takeShowUpdate() { _showUpdate.value = false }
+
     fun handle(intent: Intent?) {
         intent ?: return
         _pending.value = when (intent.action) {
@@ -52,6 +58,7 @@ class NavigationRequests @Inject constructor() {
                     NavRequest.OpenSync
                 }
             app.smsbridge.data.cloud.CloudConnectionService.ACTION_OPEN_REMOTE -> NavRequest.OpenRemote
+            app.smsbridge.data.cloud.CloudConnectionService.ACTION_SHOW_UPDATE -> { _showUpdate.value = true; null }
             Intent.ACTION_VIEW -> intent.dataString?.takeIf { it.startsWith("smsbridge://pair?") || it.startsWith("smsbridge://login?") }?.let {
                 _pairLink.value = it
                 NavRequest.OpenSync

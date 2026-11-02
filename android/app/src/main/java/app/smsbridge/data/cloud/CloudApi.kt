@@ -129,8 +129,9 @@ class CloudApi(baseUrl: String, private val token: String? = null) {
     }
 
     /** Long-polls the server's content-free change counter; returns it (possibly unchanged after the timeout). */
-    fun waitForNews(after: Long, timeoutSeconds: Int): Long =
-        call("GET", "/api/v1/notices/wait?after=$after&timeout=$timeoutSeconds").getLong("counter")
+    /** (counter, newest published app version code). */
+    fun waitForNews(after: Long, timeoutSeconds: Int): Pair<Long, Int> =
+        call("GET", "/api/v1/notices/wait?after=$after&timeout=$timeoutSeconds").let { it.getLong("counter") to it.optInt("appVersion", 0) }
 
     /** Asks to join [username]'s account (no session, no code); the owner confirms the number in the browser. */
     fun createConnectRequest(username: String, name: String): ConnectRequestDto =
@@ -218,7 +219,7 @@ class CloudApi(baseUrl: String, private val token: String? = null) {
             val withScheme = if ("://" in trimmed) trimmed else "https://$trimmed"
             val parsed = URL(withScheme)
             val localDev = parsed.host in setOf("10.0.2.2", "localhost", "127.0.0.1")
-            require(parsed.protocol == "https" || (parsed.protocol == "http" && BuildConfig.DEBUG && localDev)) {
+            require(parsed.protocol == "https" || (parsed.protocol == "http" && BuildConfig.ALLOW_LOCAL_HTTP && localDev)) {
                 "The server address must start with https://"
             }
             return withScheme
