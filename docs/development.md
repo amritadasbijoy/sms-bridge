@@ -142,11 +142,27 @@ install the APK from a file manager or browser instead and the permission is gre
 - [ ] `adb logcat | grep SmsBridge` → counts and states only, never text or numbers.
 - [ ] Reboot → periodic reconcile still scheduled (`adb shell dumpsys jobscheduler | grep smsbridge`).
 
-## Release signing
+## Release signing and publishing updates
 
-Release builds are minified and unsigned in the repo. Signing keys and passwords must never be
-committed (`*.jks`, `*.keystore`, `keystore.properties` are git-ignored). Phase 10 adds a signing
-config that reads from environment variables.
+The release key lives outside the repository in `~/.smsbridge/` (`release.jks` and
+`keystore.properties`, both mode 600; certificate SHA-256 `40:BA:72:69:…:61:95`). **Back it up**
+(e.g. an encrypted USB drive or password manager): updates must be signed with the same key, or
+phones refuse them. Release builds are signed only when that file exists.
+
+Publish an update (I run this for the owner):
+
+```bash
+# raise versionCode / versionName in android/app/build.gradle.kts, then:
+tools/publish-release.sh vps "What's new" [--required]
+```
+
+It builds and signs the release, refuses anything not signed with the release key, uploads the APK
+to the VPS, and announces it with the server's admin token (read on the server, never printed).
+Every phone is notified at once; the app downloads, checks the SHA-256 and installs. On Android 12+
+the first update asks to allow installs and to confirm; later updates install without a prompt.
+
+`tools/publish-release.sh local …` does the same against the local stack with the test-only
+`releaseTest` variant (release key and minification, but allowed to reach the local HTTP server).
 
 ## Git workflow
 

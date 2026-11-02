@@ -15,6 +15,10 @@ class UpdateCheckerTest {
         assertEquals(8, info.versionCode)
         assertEquals("0.6.0", info.versionName)
         assertEquals("https://sms.example.org/download/sms-bridge-0.6.0.apk", info.url)
+        assertEquals("ab", info.sha256)
+        val required = UpdateChecker.parse("""{"versionCode":9,"versionName":"0.7","url":"/a.apk","sha256":"cd","required":true,"notes":"Fix"}""", "https://s")!!
+        assertEquals(true, required.required)
+        assertEquals("Fix", required.notes)
         assertEquals("https://cdn.example.org/a.apk", UpdateChecker.parse("""{"versionCode":8,"versionName":"x","url":"https://cdn.example.org/a.apk"}""", "https://s")!!.url)
     }
 

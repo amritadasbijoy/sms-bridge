@@ -67,6 +67,7 @@ fun SmsBridgeRoot(navigationRequests: NavigationRequests) {
         navigationRequests.consume()
     }
 
+    app.smsbridge.feature.update.UpdateDialog()
     Scaffold(
         bottomBar = {
             if (TopDestination.entries.any { it.route == currentRoute }) {

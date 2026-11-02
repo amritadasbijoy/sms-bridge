@@ -272,7 +272,7 @@ class CloudRepository @Inject constructor(
     }
 
     /** Waits (up to [timeoutSeconds]) for any change on the account; returns the new counter. */
-    suspend fun waitForNews(after: Long, timeoutSeconds: Int): Long = io { api().waitForNews(after, timeoutSeconds) }
+    suspend fun waitForNews(after: Long, timeoutSeconds: Int): Pair<Long, Int> = io { api().waitForNews(after, timeoutSeconds) }
 
     // ---- Listener mode -----------------------------------------------------------------------
 

@@ -13,11 +13,20 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 /** A newer app version published on the user's server. */
-data class UpdateInfo(val versionCode: Int, val versionName: String, val url: String)
+data class UpdateInfo(
+    val versionCode: Int,
+    val versionName: String,
+    val url: String,
+    val sha256: String = "",
+    /** Older versions should update before going on (the dialog cannot be dismissed). */
+    val required: Boolean = false,
+    val notes: String = "",
+)
 
 /**
- * The app is installed from an APK, so no store tells people about new versions: the server
- * publishes `/download/latest.json` next to the APK and the app checks it (at most every 12 hours).
+ * The app is installed from an APK, so no store tells people about new versions. The server
+ * publishes releases (GET /api/v1/app/latest; /download/latest.json for older apps) and wakes
+ * phones when one appears; otherwise the app checks at most every 12 hours.
  */
 @Singleton
 class UpdateChecker @Inject constructor(
@@ -33,7 +42,7 @@ class UpdateChecker @Inject constructor(
         val json = if (!force && cached != null && now - last < CHECK_INTERVAL_MS) {
             cached
         } else {
-            runCatching { fetch("$server/download/latest.json") }
+            runCatching { runCatching { fetch("$server/api/v1/app/latest") }.getOrElse { fetch("$server/download/latest.json") } }
                 .onFailure { AppLog.i(TAG, "update check failed (${it.javaClass.simpleName})") }
                 .getOrNull()
                 ?.also { settings.putString(K_LATEST, it); settings.putString(K_LAST_CHECK, now.toString()) }
@@ -50,7 +59,7 @@ class UpdateChecker @Inject constructor(
         }
         try {
             if (c.responseCode != 200) throw java.io.IOException("HTTP ${c.responseCode}")
-            return c.inputStream.bufferedReader().use { it.readText() }.take(4_096)
+            return c.inputStream.bufferedReader().use { it.readText() }.take(8_192)
         } finally {
             c.disconnect()
         }
@@ -64,13 +73,16 @@ class UpdateChecker @Inject constructor(
         private const val K_LAST_CHECK = "update.last_check"
         private const val K_LATEST = "update.latest"
 
-        /** Parses latest.json; a relative APK url is resolved against [server]. Only http(s) links are accepted. */
+        /** Parses a release; a relative APK url is resolved against [server]. Only http(s) links are accepted. */
         fun parse(json: String, server: String): UpdateInfo? = runCatching {
             val o = JSONObject(json)
             val raw = o.getString("url")
             val url = if (raw.startsWith("/")) server.trimEnd('/') + raw else raw
             require(url.startsWith("https://") || url.startsWith("http://"))
-            UpdateInfo(o.getInt("versionCode"), o.getString("versionName"), url)
+            UpdateInfo(
+                o.getInt("versionCode"), o.getString("versionName"), url,
+                o.optString("sha256"), o.optBoolean("required", false), o.optString("notes"),
+            )
         }.getOrNull()
     }
 }

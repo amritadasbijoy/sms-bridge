@@ -44,6 +44,8 @@ services:
       SMSBRIDGE_COOKIE_SECURE: ${SMSBRIDGE_COOKIE_SECURE:-true}
       SMSBRIDGE_ALLOW_REGISTRATION: ${SMSBRIDGE_ALLOW_REGISTRATION:-false}
       SMSBRIDGE_TRUST_PROXY: ${SMSBRIDGE_TRUST_PROXY:-false}
+      # Lets tools/publish-release.sh announce app updates; empty = publishing disabled.
+      SMSBRIDGE_ADMIN_TOKEN: ${SMSBRIDGE_ADMIN_TOKEN:-}
     # Bound to localhost only. In production the proxy is the only public entry point.
     ports:
       - "127.0.0.1:${SMSBRIDGE_LOCAL_PORT:-8080}:8080"
@@ -62,6 +64,8 @@ services:
     ports:
       - "127.0.0.1:${SMSBRIDGE_WEB_PORT:-8081}:80"
     networks: [edge]
+    volumes:
+      - ${SMSBRIDGE_DOWNLOADS_DIR:-./downloads}:/srv/downloads:ro
     read_only: true
     tmpfs: [/data, /config]
     security_opt: ["no-new-privileges:true"]

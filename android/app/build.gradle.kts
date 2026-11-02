@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -13,21 +15,48 @@ android {
         applicationId = "app.smsbridge"
         minSdk = 26
         targetSdk = 34
-        versionCode = 9
-        versionName = "0.7.0"
+        versionCode = 14
+        versionName = "0.8.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
+        // Plain HTTP only to the emulator's view of the development machine (debug and releaseTest).
+        buildConfigField("boolean", "ALLOW_LOCAL_HTTP", "false")
+    }
+
+    // The release key lives outside the repository: ~/.smsbridge/keystore.properties
+    // (or the file named by SMSBRIDGE_KEYSTORE_PROPERTIES). Without it, release builds stay unsigned.
+    val keystoreFile = (System.getenv("SMSBRIDGE_KEYSTORE_PROPERTIES") ?: "${System.getProperty("user.home")}/.smsbridge/keystore.properties")
+        .let { file(it) }
+    val releaseSigning = if (keystoreFile.exists()) {
+        val props = Properties().apply { keystoreFile.inputStream().use { load(it) } }
+        signingConfigs.create("release") {
+            storeFile = file(props.getProperty("storeFile"))
+            storePassword = props.getProperty("storePassword")
+            keyAlias = props.getProperty("keyAlias")
+            keyPassword = props.getProperty("keyPassword")
+        }
+    } else {
+        null
     }
 
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+            buildConfigField("boolean", "ALLOW_LOCAL_HTTP", "true")
         }
         release {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // Signing is configured outside the repository (see docs/development.md).
+            // Signed only where the key exists (see docs/development.md); never committed.
+            releaseSigning?.let { signingConfig = it }
+        }
+        // Test-only: exactly the release (package, key, minification) but allowed to reach the local
+        // HTTP stack, to test self-updates on emulators. Never published (tools/publish-release.sh builds "release").
+        create("releaseTest") {
+            initWith(getByName("release"))
+            matchingFallbacks += listOf("release")
+            buildConfigField("boolean", "ALLOW_LOCAL_HTTP", "true")
         }
     }
 
