@@ -69,7 +69,15 @@ export const api = {
   registerBrowser: (encPublicKey: string, signPublicKey: string) =>
     request<{ deviceId: string }>("POST", "/browser/devices", { name: "", encPublicKey, signPublicKey }),
   browserKeys: (deviceId: string) =>
-    request<{ trusted: boolean; currentVersion: number | null; keys: WrappedKey[] }>("GET", `/browser/devices/${encodeURIComponent(deviceId)}/keys`),
+    request<{ trusted: boolean; currentVersion: number | null; keys: WrappedKey[]; challenge: string | null }>(
+      "GET",
+      `/browser/devices/${encodeURIComponent(deviceId)}/keys`,
+    ),
+  requestConfirm: (deviceId: string) => request<void>("POST", `/browser/devices/${encodeURIComponent(deviceId)}/confirm`, {}),
+  connectRequests: () => request<{ id: string; name: string; createdAt: string; options: number[] }[]>("GET", "/connect-requests"),
+  confirmConnect: (id: string, number: number) =>
+    request<{ approved: boolean }>("POST", `/connect-requests/${encodeURIComponent(id)}/confirm`, { number }),
+  rejectConnect: (id: string) => request<void>("POST", `/connect-requests/${encodeURIComponent(id)}/reject`, {}),
   invites: () => request<{ createdAt: string; expiresAt: string; used: boolean; usedAt: string | null }[]>("GET", "/invites"),
   createInvite: () => request<{ code: string; expiresAt: string }>("POST", "/invites", {}),
   registerWithInvite: (username: string, password: string, invite: string) =>

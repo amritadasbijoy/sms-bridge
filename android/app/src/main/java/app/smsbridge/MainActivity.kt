@@ -39,5 +39,7 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         // Permissions or the default SMS app may have changed while we were in the background.
         captureCoordinator.start()
+        // Stays running in the background while sync is connected (it stops itself otherwise).
+        app.smsbridge.data.cloud.CloudConnectionService.start(this)
     }
 }

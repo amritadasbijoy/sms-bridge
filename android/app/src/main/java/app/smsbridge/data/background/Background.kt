@@ -68,6 +68,7 @@ class BootReceiver : BroadcastReceiver() {
                 EntryPointAccessors.fromApplication(context.applicationContext, ReceiverEntryPoint::class.java)
                     .captureCoordinator()
                     .start()
+                    .also { app.smsbridge.data.cloud.CloudConnectionService.start(context) }
         }
     }
 }

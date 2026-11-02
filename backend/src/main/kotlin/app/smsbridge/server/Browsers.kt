@@ -24,11 +24,15 @@ import kotlinx.serialization.Serializable
 
 @Serializable data class RegisterBrowser(val name: String, val encPublicKey: String, val signPublicKey: String)
 @Serializable data class BrowserDevice(val deviceId: String)
-@Serializable data class BrowserKeys(val trusted: Boolean, val currentVersion: Int?, val keys: List<WrappedKey>)
+@Serializable data class BrowserKeys(
+    val trusted: Boolean, val currentVersion: Int?, val keys: List<WrappedKey>,
+    /** The approving phone's number-matching challenge, once it opened the prompt. */
+    val challenge: String? = null,
+)
 
 private const val MAX_PENDING_BROWSERS = 5
 
-class BrowserDeviceService(private val db: Db) {
+class BrowserDeviceService(private val db: Db, private val wake: Notices = Notices()) {
     suspend fun register(userId: UUID, body: RegisterBrowser, ip: String): BrowserDevice {
         requireRawKey(body.encPublicKey)
         requireRawKey(body.signPublicKey)
@@ -48,6 +52,7 @@ class BrowserDeviceService(private val db: Db) {
             )
             audit(userId, id, "browser_registered", "ok", ip)
         }
+        wake.bump(userId)
         return BrowserDevice(id.toString())
     }
 
@@ -64,7 +69,10 @@ class BrowserDeviceService(private val db: Db) {
             "SELECT key_version, wrapped_key FROM vault_keys WHERE user_id = ? AND recipient = ? ORDER BY key_version",
             userId, deviceId.toString(),
         ) { WrappedKey(it.getInt(1), Base64.getEncoder().encodeToString(it.getBytes(2))) }
-        BrowserKeys(trusted, version, keys)
+        val challenge = query("SELECT confirm_salt FROM devices WHERE id = ? AND confirm_requested_at IS NOT NULL", deviceId) {
+            it.getBytes(1)?.let(Base64.getEncoder()::encodeToString)
+        }.singleOrNull()
+        BrowserKeys(trusted, version, keys, challenge)
     }
 }
 

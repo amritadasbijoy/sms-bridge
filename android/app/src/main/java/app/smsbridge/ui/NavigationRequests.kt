@@ -29,6 +29,12 @@ class NavigationRequests @Inject constructor() {
 
     fun takePairLink(): String? = _pairLink.value.also { _pairLink.value = null }
 
+    private val _confirmDevice = MutableStateFlow<String?>(null)
+    /** A browser to confirm by number, from the approval notification. */
+    val confirmDevice: StateFlow<String?> = _confirmDevice.asStateFlow()
+
+    fun takeConfirmDevice(): String? = _confirmDevice.value.also { _confirmDevice.value = null }
+
     fun handle(intent: Intent?) {
         intent ?: return
         _pending.value = when (intent.action) {
@@ -38,6 +44,11 @@ class NavigationRequests @Inject constructor() {
                 intent.dataString,
                 intent.getStringExtra("sms_body") ?: intent.getStringExtra(Intent.EXTRA_TEXT),
             )?.let { NavRequest.Compose(it.recipients.joinToString(", ").ifEmpty { null }, it.body) }
+            app.smsbridge.data.cloud.CloudConnectionService.ACTION_CONFIRM_DEVICE ->
+                intent.getStringExtra(app.smsbridge.data.cloud.CloudConnectionService.EXTRA_DEVICE_ID)?.let {
+                    _confirmDevice.value = it
+                    NavRequest.OpenSync
+                }
             Intent.ACTION_VIEW -> intent.dataString?.takeIf { it.startsWith("smsbridge://pair?") }?.let {
                 _pairLink.value = it
                 NavRequest.OpenSync
