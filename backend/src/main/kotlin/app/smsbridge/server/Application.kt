@@ -52,7 +52,8 @@ fun main() {
 
 @Serializable data class ApiError(val error: String, val message: String)
 @Serializable data class Credentials(val username: String, val password: String, val totp: String? = null, val invite: String? = null)
-@Serializable data class Me(val userId: String, val username: String, val totpEnabled: Boolean = false)
+@Serializable data class Me(val userId: String, val username: String, val totpEnabled: Boolean = false, val hasPassword: Boolean = true)
+@Serializable data class SetPassword(val password: String, val currentPassword: String? = null)
 @Serializable data class AuthStatus(val registrationOpen: Boolean)
 @Serializable data class PairingCodeResponse(val code: String, val expiresAt: String)
 @Serializable data class RegisterDevice(
@@ -140,6 +141,7 @@ fun Application.module(config: Config, db: Db) {
     val invites = InviteService(db)
     val confirm = ConfirmService(db, wake)
     val connects = ConnectRequestService(db, devices, wake)
+    val logins = LoginRequestService(db, auth, wake)
     install(io.ktor.server.websocket.WebSockets) { pingPeriodMillis = 30_000 }
 
     routing {
@@ -158,11 +160,29 @@ fun Application.module(config: Config, db: Db) {
             twoFactorRoutes(auth, twoFactor, db)
             browserAndInviteRoutes(auth, browsers, invites)
             confirmRoutes(auth, sync, wake, confirm, connects)
+            loginRoutes(sync, logins) { token -> setSessionCookie(token, config) }
             rateLimit(AUTH_LIMIT) {
                 // An unconnected phone asks to join (no session, no code); rate limited like sign-in.
                 post("/connect-requests") {
                     call.respond(HttpStatusCode.Created, connects.create(call.receive(), call.ip()))
                 }
+                // A browser asks to be signed in by a phone (QR or username + number).
+                post("/auth/login-requests") {
+                    call.respond(HttpStatusCode.Created, logins.create(call.receive(), call.ip()))
+                }
+                // "Get started": a new account without a password.
+                post("/auth/start") {
+                    val body = runCatching { call.receive<StartAccount>() }.getOrDefault(StartAccount())
+                    val (userId, name) = auth.registerPasswordless(call.ip(), body.invite)
+                    call.setSessionCookie(auth.createSession(userId, call.request.header(HttpHeaders.UserAgent)), config)
+                    call.respond(HttpStatusCode.Created, Me(userId.toString(), name, hasPassword = false))
+                }
+            }
+            post("/auth/password") {
+                val user = auth.requireUser(call)
+                val body = call.receive<SetPassword>()
+                auth.setPassword(user.first, body.password.toCharArray(), body.currentPassword?.toCharArray(), call.ip())
+                call.respond(HttpStatusCode.NoContent)
             }
         }
     }
@@ -203,7 +223,7 @@ private fun Route.authRoutes(auth: AuthService, config: Config) = route("/auth")
     }
     get("/me") {
         val user = auth.requireUser(call)
-        call.respond(Me(user.first.toString(), user.second, auth.twoFactor.enabled(user.first)))
+        call.respond(Me(user.first.toString(), user.second, auth.twoFactor.enabled(user.first), auth.hasPassword(user.first)))
     }
 }
 
@@ -220,7 +240,7 @@ private fun sessionCookie(value: String, config: Config, maxAge: Int) = Cookie(
     extensions = mapOf("SameSite" to "Strict"),
 )
 
-private fun ApplicationCall.setSessionCookie(token: String, config: Config) =
+internal fun ApplicationCall.setSessionCookie(token: String, config: Config) =
     response.cookies.append(sessionCookie(token, config, SESSION_LIFETIME.seconds.toInt()))
 
 /**
@@ -250,6 +270,47 @@ class AuthService(private val db: Db, private val config: Config, val twoFactor:
             throw ApiException(HttpStatusCode.BadRequest, "weak_password", "Use a password of at least ${Passwords.MIN_LENGTH} characters.")
         }
         val hash = Passwords.hash(password).also { password.fill('\u0000') }
+        return createUser(name, hash, ip, invite)
+    }
+
+    /**
+     * "Get started": an account without a password (signed into later by scanning with a phone).
+     * The username is generated; the same registration rules apply (first account, open, or invite).
+     */
+    suspend fun registerPasswordless(ip: String, invite: String?): Pair<UUID, String> {
+        repeat(5) {
+            val name = "user-" + Secrets.pairingCode().replace("-", "").lowercase().take(8)
+            try {
+                return createUser(name, null, ip, invite) to name
+            } catch (e: ApiException) {
+                if (e.code != "username_taken") throw e
+            }
+        }
+        throw ApiException(HttpStatusCode.Conflict, "try_again", "Please try again.")
+    }
+
+    /** Sets a password: for an account without one, or a change with the current password. */
+    suspend fun setPassword(userId: UUID, password: CharArray, current: CharArray?, ip: String) {
+        if (password.size < Passwords.MIN_LENGTH || password.size > Passwords.MAX_LENGTH) {
+            throw ApiException(HttpStatusCode.BadRequest, "weak_password", "Use a password of at least ${Passwords.MIN_LENGTH} characters.")
+        }
+        val existing = db.tx { query("SELECT password_hash FROM users WHERE id = ?", userId) { it.getString(1) }.single() }
+        if (existing != null && (current == null || !Passwords.verify(current, existing))) {
+            current?.fill('\u0000')
+            throw ApiException(HttpStatusCode.Unauthorized, "invalid_credentials", "The current password is wrong.")
+        }
+        current?.fill('\u0000')
+        val hash = Passwords.hash(password).also { password.fill('\u0000') }
+        db.tx {
+            update("UPDATE users SET password_hash = ? WHERE id = ?", hash, userId)
+            audit(userId, null, "password_set", "ok", ip)
+        }
+    }
+
+    suspend fun hasPassword(userId: UUID): Boolean =
+        db.tx { query("SELECT password_hash IS NOT NULL FROM users WHERE id = ?", userId) { it.getBoolean(1) }.single() }
+
+    private suspend fun createUser(name: String, hash: String?, ip: String, invite: String?): UUID {
         val id = UUID.randomUUID()
         return db.tx {
             // Serialise first-account creation so two simultaneous requests cannot both succeed.

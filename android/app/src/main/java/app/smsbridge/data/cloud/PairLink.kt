@@ -19,8 +19,32 @@ data class PairLink(val server: String, val pairingCode: String?, val deviceId: 
     override fun hashCode() = listOf(server, pairingCode, deviceId).hashCode()
 }
 
+/** A browser's sign-in QR code: `smsbridge://login?v=1&s=<server>&r=<request id>&f=<fingerprint>`. */
+data class LoginLink(val server: String, val requestId: String, val fingerprint: ByteArray) {
+    override fun equals(other: Any?) = other is LoginLink && other.server == server && other.requestId == requestId && other.fingerprint.contentEquals(fingerprint)
+    override fun hashCode() = listOf(server, requestId).hashCode()
+}
+
 object PairLinks {
     private const val PREFIX = "smsbridge://pair?"
+    private const val LOGIN_PREFIX = "smsbridge://login?"
+
+    private fun params(query: String): Map<String, String> = query.split('&').mapNotNull { part ->
+        val i = part.indexOf('=')
+        if (i <= 0) null else part.substring(0, i) to URLDecoder.decode(part.substring(i + 1), "UTF-8")
+    }.toMap()
+
+    /** Null unless [text] is a well-formed version-1 sign-in link. */
+    fun parseLogin(text: String): LoginLink? {
+        val trimmed = text.trim()
+        if (!trimmed.startsWith(LOGIN_PREFIX)) return null
+        val p = params(trimmed.removePrefix(LOGIN_PREFIX))
+        if (p["v"] != "1") return null
+        val server = p["s"]?.takeIf { it.startsWith("https://") || it.startsWith("http://") } ?: return null
+        val request = p["r"]?.takeIf { Regex("[0-9a-fA-F-]{36}").matches(it) } ?: return null
+        val fingerprint = p["f"]?.let { runCatching { Base64.getUrlDecoder().decode(it) }.getOrNull() }?.takeIf { it.size == 32 } ?: return null
+        return LoginLink(server, request, fingerprint)
+    }
 
     /** Null unless [text] is a well-formed version-1 pairing link with something to do. */
     fun parse(text: String): PairLink? {

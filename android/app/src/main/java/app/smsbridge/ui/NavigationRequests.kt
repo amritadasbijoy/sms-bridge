@@ -52,7 +52,7 @@ class NavigationRequests @Inject constructor() {
                     NavRequest.OpenSync
                 }
             app.smsbridge.data.cloud.CloudConnectionService.ACTION_OPEN_REMOTE -> NavRequest.OpenRemote
-            Intent.ACTION_VIEW -> intent.dataString?.takeIf { it.startsWith("smsbridge://pair?") }?.let {
+            Intent.ACTION_VIEW -> intent.dataString?.takeIf { it.startsWith("smsbridge://pair?") || it.startsWith("smsbridge://login?") }?.let {
                 _pairLink.value = it
                 NavRequest.OpenSync
             }

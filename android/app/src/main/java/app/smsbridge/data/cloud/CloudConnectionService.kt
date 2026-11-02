@@ -70,7 +70,7 @@ class CloudConnectionService : Service() {
                 if (cloud.refresh() !is CloudState.Ready) break
                 counter = cloud.waitForNews(counter, WAIT_SECONDS)
                 backoffMs = 5_000L
-                val asking = cloud.pendingApprovals().filter { it.confirmRequested }
+                val asking = cloud.pendingApprovals().filter { it.confirmRequested } + cloud.loginAsks()
                 asking.filter { it.deviceId !in notified }.forEach { notifyConfirm(it); notified += it.deviceId }
                 (notified - asking.map { it.deviceId }.toSet()).forEach { NotificationManagerCompat.from(this).cancel(it.hashCode()) }
                 notified.retainAll(asking.map { it.deviceId }.toSet())
@@ -111,12 +111,18 @@ class CloudConnectionService : Service() {
     private fun notifyConfirm(request: PendingApproval) {
         val n = NotificationCompat.Builder(this, CHANNEL_APPROVALS)
             .setSmallIcon(R.drawable.ic_stat_message)
-            .setContentTitle(if (request.isPhone) "${request.name} wants to join" else "${request.name} wants to open your messages")
+            .setContentTitle(
+                when {
+                    request.loginRequestId != null -> "Sign-in request: ${request.name}"
+                    request.isPhone -> "${request.name} wants to join"
+                    else -> "${request.name} wants to open your messages"
+                },
+            )
             .setContentText("Tap to confirm with the number it shows.")
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
-            .setContentIntent(openApp(request.deviceId))
+            .setContentIntent(openApp(request.loginRequestId ?: request.deviceId))
             .build()
         runCatching { NotificationManagerCompat.from(this).notify(request.deviceId.hashCode(), n) }
     }

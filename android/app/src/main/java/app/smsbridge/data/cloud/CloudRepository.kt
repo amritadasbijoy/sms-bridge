@@ -53,10 +53,12 @@ data class PendingApproval(
     /** The browser asked to be confirmed by number on a phone. */
     val confirmRequested: Boolean = false,
     val isPhone: Boolean = false,
+    /** Set when this is a browser signing in (not an already registered device). */
+    val loginRequestId: String? = null,
 )
 
-/** An open number-matching prompt on this phone. */
-data class ConfirmPrompt(val request: PendingApproval, val options: List<Int>, internal val correct: Int)
+/** An open number-matching prompt on this phone ([loginRequestId]: a browser signing in by username). */
+data class ConfirmPrompt(val request: PendingApproval, val options: List<Int>, internal val correct: Int, val loginRequestId: String? = null)
 
 /** A new SMS received by another phone on the account (listener mode). */
 data class RemoteSms(val deviceName: String, val address: String?, val body: String, val date: Long)
@@ -185,14 +187,53 @@ class CloudRepository @Inject constructor(
 
     /** The user tapped [picked]: the right number approves; anything else declines. True if approved. */
     suspend fun finishConfirm(prompt: ConfirmPrompt, picked: Int?): Boolean = io {
-        if (picked == prompt.correct) {
-            approve(prompt.request)
-            true
-        } else {
-            api().decline(prompt.request.deviceId)
-            false
+        val login = prompt.loginRequestId
+        when {
+            picked == prompt.correct && login != null -> { approveLogin(login, prompt.request); true }
+            picked == prompt.correct -> { approve(prompt.request); true }
+            login != null -> { api().loginDecline(login); false }
+            else -> { api().decline(prompt.request.deviceId); false }
         }
     }
+
+    // ---- Signing browsers in ----------------------------------------------------------------
+
+    /** A scanned sign-in QR code: checks the browser's keys against the scanned fingerprint and signs it in. */
+    suspend fun approveScannedLogin(link: LoginLink): String = io {
+        if (refresh() !is CloudState.Ready) throw IllegalArgumentException("Connect this phone first, then scan the sign-in code again.")
+        val ask = api().loginRequest(link.requestId)
+        if (!PairLinks.matches(link.fingerprint, ask.encPublic, ask.signPublic)) {
+            AppLog.w(TAG, "sign-in fingerprint does not match the server's keys; not approving")
+            throw IllegalArgumentException("Security check failed: this browser's keys do not match the QR code. It was not signed in.")
+        }
+        approveLogin(link.requestId, ask.toApproval())
+        ask.name
+    }
+
+    /** Browsers that typed this account's username and wait for a number confirmation. */
+    suspend fun loginAsks(): List<PendingApproval> = io {
+        if (refresh() !is CloudState.Ready) return@io emptyList()
+        api().loginRequests().map { it.toApproval(loginId = it.id) }
+    }
+
+    suspend fun startLoginConfirm(ask: PendingApproval): ConfirmPrompt = io {
+        val loginId = ask.loginRequestId ?: throw IllegalArgumentException("Not a sign-in request.")
+        val salt = ConfirmNumbers.newSalt()
+        api().loginChallenge(loginId, salt)
+        val correct = ConfirmNumbers.number(salt, PairLinks.fingerprint(ask.encPublic, ask.signPublic))
+        ConfirmPrompt(ask, ConfirmNumbers.options(correct), correct, loginId)
+    }
+
+    /** Wraps every vault key version for the browser's new device id and approves the sign-in. */
+    private suspend fun approveLogin(loginId: String, request: PendingApproval) {
+        val current = settings.getString(K_VK_CURRENT)?.toIntOrNull() ?: throw IllegalStateException("no vault key")
+        val wrapped = (1..current).map { v -> WrappedKeyDto(v, CloudCrypto.wrapForDevice(secret(vkKey(v))!!, request.encPublic, request.deviceId, v)) }
+        api().loginApprove(loginId, wrapped)
+        AppLog.i(TAG, "signed a browser in")
+    }
+
+    private fun LoginAskDto.toApproval(loginId: String? = null) =
+        PendingApproval(deviceId, name, CloudCrypto.safetyCode(encPublic, signPublic), encPublic, signPublic, confirmRequested = true, isPhone = false, loginRequestId = loginId)
 
     /** This waiting phone asks to be confirmed by number on an approved phone. */
     suspend fun requestConfirmSelf() = io { api().requestConfirm() }

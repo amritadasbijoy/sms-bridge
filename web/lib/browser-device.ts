@@ -71,12 +71,22 @@ export function ensureDevice(userId: string): Promise<DeviceRecord> {
   return p;
 }
 
+/** A fresh key pair for this browser; the private key can never be exported. */
+export async function generateKeys(): Promise<{ encKeys: CryptoKeyPair; encPublic: string; signPublic: string }> {
+  const encKeys = (await crypto.subtle.generateKey({ name: "X25519" }, false, ["deriveBits"])) as CryptoKeyPair;
+  const encPublic = toB64(await crypto.subtle.exportKey("raw", encKeys.publicKey));
+  return { encKeys, encPublic, signPublic: await signingPublicKey() };
+}
+
+/** Stores keys a phone approved during sign-in, so the dashboard opens with them. */
+export async function saveApprovedDevice(userId: string, deviceId: string, keys: { encKeys: CryptoKeyPair; encPublic: string; signPublic: string }) {
+  await save({ userId, deviceId, ...keys });
+}
+
 async function createOrLoad(userId: string): Promise<DeviceRecord> {
   const existing = await load(userId);
   if (existing) return existing;
-  const encKeys = (await crypto.subtle.generateKey({ name: "X25519" }, false, ["deriveBits"])) as CryptoKeyPair;
-  const encPublic = toB64(await crypto.subtle.exportKey("raw", encKeys.publicKey));
-  const signPublic = await signingPublicKey();
+  const { encKeys, encPublic, signPublic } = await generateKeys();
   const { deviceId } = await api.registerBrowser(encPublic, signPublic);
   const record: DeviceRecord = { userId, deviceId, encKeys, encPublic, signPublic };
   await save(record);
