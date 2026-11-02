@@ -241,6 +241,32 @@ function PhoneSignIn({ username, onApproved, onFailed }: { username?: string; on
   );
 }
 
+/** The Android app, for visitors who do not have it yet (version from the server's latest release). */
+function DownloadApp() {
+  const [version, setVersion] = useState<string | null>(null);
+  useEffect(() => {
+    fetch("/api/v1/app/latest", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((r: { versionName?: string } | null) => setVersion(r?.versionName ?? null), () => {});
+  }, []);
+  return (
+    <div className="w-full max-w-sm rounded-lg border bg-card p-4 text-center shadow-sm">
+      <p className="text-sm font-medium">SMS Bridge for Android</p>
+      <a
+        href="/download/sms-bridge.apk"
+        download
+        className="mt-3 inline-flex h-11 w-full items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+      >
+        Download the app{version ? ` (version ${version})` : ""}
+      </a>
+      <p className="mt-2 text-xs text-muted-foreground">
+        Open the downloaded file on your Android phone and tap Install. If Android asks, allow installing from your
+        browser. Updates then arrive inside the app.
+      </p>
+    </div>
+  );
+}
+
 export default function Login() {
   const { me, refreshMe } = useSession();
   const router = useRouter();
@@ -280,10 +306,11 @@ export default function Login() {
 
   const canStart = registrationOpen || Boolean(invite);
   return (
-    <div className="flex min-h-screen items-center justify-center px-4">
+    <div className="flex min-h-screen flex-col items-center justify-center gap-4 px-4 py-8">
       <Head>
         <title>Sign in · SMS Bridge</title>
       </Head>
+      <DownloadApp />
       {mode === "password" || mode === "create" ? (
         <PasswordForm initialCreating={mode === "create"} onBack={() => setMode("phone")} />
       ) : (
