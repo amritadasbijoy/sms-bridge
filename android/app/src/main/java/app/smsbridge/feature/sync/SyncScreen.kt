@@ -99,7 +99,13 @@ class SyncViewModel @Inject constructor(
             try {
                 block()
             } catch (e: CloudHttpException) {
-                _error.value = e.message
+                if (e.status == 401 && cloud.state.value !is CloudState.NotConnected) {
+                    // Revoked on the Devices page: show the reconnect screen, not "connected" plus an error.
+                    cloud.handleRevoked()
+                    _wasRevoked.value = true
+                } else {
+                    _error.value = e.message
+                }
             } catch (e: IllegalArgumentException) {
                 _error.value = e.message
             } catch (e: IOException) {
@@ -365,7 +371,7 @@ private fun HistoryRow(viewModel: SyncViewModel) {
         AlertDialog(
             onDismissRequest = { confirm = false },
             title = { Text("Upload your full history?") },
-            text = { Text("Every older message in this phone's archive is encrypted and uploaded. New messages keep going first. This can take a while for large archives.") },
+            text = { Text("Every older message in this phone's archive is encrypted and uploaded, newest to oldest. New messages keep going first. This can take a while for large archives.") },
             confirmButton = { TextButton(onClick = { confirm = false; viewModel.uploadFullHistory() }) { Text("Upload") } },
             dismissButton = { TextButton(onClick = { confirm = false }) { Text("Cancel") } },
         )
