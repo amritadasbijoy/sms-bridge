@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { search, type Message } from "@/lib/messages";
+import { usePhones } from "@/lib/phones";
 import { formatDateTime } from "@/lib/utils";
 
 const PAGE = 100;
@@ -11,6 +12,9 @@ export function MessageList({ messages, empty }: { messages: Message[]; empty: s
   const [query, setQuery] = useState("");
   const [shown, setShown] = useState(PAGE);
   const filtered = useMemo(() => search(messages, query), [messages, query]);
+  const { phones, selected, labelOf } = usePhones();
+  // Which phone got it, when the page shows several phones' messages.
+  const showPhone = phones.length > 1 && !selected;
 
   return (
     <div className="space-y-3">
@@ -39,7 +43,7 @@ export function MessageList({ messages, empty }: { messages: Message[]; empty: s
                 <span className="flex items-center gap-2 text-xs text-muted-foreground">
                   {m.box === "INBOX" && !m.read && <Badge>Unread</Badge>}
                   {m.box === "FAILED" && <Badge variant="destructive">Failed</Badge>}
-                  {m.deviceIds.length > 1 && <Badge variant="outline">{m.deviceIds.length} phones</Badge>}
+                  {showPhone && <Badge variant="outline">{m.deviceIds.map(labelOf).join(", ")}</Badge>}
                   {formatDateTime(m.date)}
                 </span>
               </div>

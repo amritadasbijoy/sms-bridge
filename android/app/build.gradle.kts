@@ -15,12 +15,14 @@ android {
         applicationId = "app.smsbridge"
         minSdk = 26
         targetSdk = 34
-        versionCode = 15
-        versionName = "0.8.1"
+        versionCode = 16
+        versionName = "0.9.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
         // Plain HTTP only to the emulator's view of the development machine (debug and releaseTest).
         buildConfigField("boolean", "ALLOW_LOCAL_HTTP", "false")
+        // Shown to new users ("open … on your computer"); any server's QR code works.
+        buildConfigField("String", "DEFAULT_SITE", "\"sms.techistbd.com\"")
     }
 
     // The release key lives outside the repository: ~/.smsbridge/keystore.properties

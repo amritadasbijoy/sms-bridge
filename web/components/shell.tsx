@@ -2,7 +2,9 @@ import Head from "next/head";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { useEffect, type ReactNode } from "react";
+import { AddPhoneButton } from "@/components/add-phone";
 import { ConnectRequests } from "@/components/connect-requests";
+import { NewMessageToast, PhoneTabs } from "@/components/phone-tabs";
 import { Button } from "@/components/ui/button";
 import { useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
@@ -18,8 +20,8 @@ const NAV = [
   { href: "/settings/", label: "Settings" },
 ];
 
-/** Signed-in layout. Sends signed-out visitors to /login. */
-export function Shell({ title, children }: { title: string; children: ReactNode }) {
+/** Signed-in layout. Sends signed-out visitors to /login. [phoneTabs]: the page lists messages, so show the phone tabs. */
+export function Shell({ title, children, phoneTabs }: { title: string; children: ReactNode; phoneTabs?: boolean }) {
   const { me, vault, lock, signOut } = useSession();
   const router = useRouter();
 
@@ -41,7 +43,7 @@ export function Shell({ title, children }: { title: string; children: ReactNode 
             SMS Bridge
           </Link>
           <div className="flex items-center gap-2 text-sm">
-            <span className="hidden text-muted-foreground sm:inline">{me.username}</span>
+            {vault.status === "ready" && <AddPhoneButton size="sm" className="hidden sm:inline-flex" />}
             {vault.status === "ready" && (
               <Button variant="outline" size="sm" onClick={lock} title="Forget the vault key in this tab">
                 Lock
@@ -69,8 +71,10 @@ export function Shell({ title, children }: { title: string; children: ReactNode 
         </nav>
       </header>
       <ConnectRequests />
+      <NewMessageToast />
       <main className="mx-auto max-w-6xl px-4 py-6">
         <h1 className="mb-5 text-xl font-semibold">{title}</h1>
+        {phoneTabs && vault.status === "ready" && <PhoneTabs />}
         {children}
       </main>
     </div>

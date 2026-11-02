@@ -115,6 +115,31 @@ class CloudRepository @Inject constructor(
             deviceId = UUID.randomUUID().toString()
             CloudApi(server).register(pairingCode, deviceId, name, keys.encPublic, keys.signPublic)
         }
+        saveConnection(server, deviceId, token, keys)
+
+        val status = api().vaultStatus()
+        rememberCanStartOver(status)
+        AppLog.i(TAG, "registered with server; vault exists=${status.exists}")
+        if (!status.exists) return@io createVault()
+        refresh()
+    }
+
+    /**
+     * No account yet, and the user scanned a browser's QR code: like WhatsApp, this phone gets its
+     * own account on that server (no password) and becomes its first, approved device.
+     */
+    private suspend fun startOwnAccount(serverUrl: String): CloudState {
+        val server = CloudApi.normalize(serverUrl)
+        val keys = DeviceKeys.generate()
+        val deviceId = UUID.randomUUID().toString()
+        val name = devices.localDevice.first()?.name ?: "Android device"
+        val token = CloudApi(server).startPhone(deviceId, name, keys.encPublic, keys.signPublic)
+        saveConnection(server, deviceId, token, keys)
+        AppLog.i(TAG, "created this phone's own account")
+        return createVault()
+    }
+
+    private suspend fun saveConnection(server: String, deviceId: String, token: String, keys: DeviceKeys) {
         settings.putString(K_CLOUD_DEVICE_ID, deviceId)
         settings.deletePrefix(PREFIX)
         settings.deletePrefix(K_REVOKED_NOTICE)
@@ -125,19 +150,17 @@ class CloudRepository @Inject constructor(
         putSecret(K_SIGN_PRIVATE, keys.signPrivate)
         settings.putString(K_ENC_PUBLIC, b64(keys.encPublic))
         settings.putString(K_SIGN_PUBLIC, b64(keys.signPublic))
+    }
 
-        val status = api().vaultStatus()
-        rememberCanStartOver(status)
-        AppLog.i(TAG, "registered with server; vault exists=${status.exists}")
-        if (!status.exists) {
-            // First phone: create the vault at once. The recovery key is made and kept on this phone
-            // (viewable later in Sync) but never put in the user's way.
-            putSecret(vkKey(1), CloudCrypto.newVaultKey())
-            settings.putString(K_VK_CURRENT, "1")
-            putSecret(K_PENDING_RECOVERY, CloudCrypto.newRecoveryKey())
-            return@io runCatching { confirmRecoverySaved(remindLater = true) }.getOrElse { refresh() }
-        }
-        refresh()
+    /**
+     * First phone: create the vault at once. The recovery key is made and kept on this phone
+     * (viewable later in Sync) but never put in the user's way.
+     */
+    private suspend fun createVault(): CloudState {
+        putSecret(vkKey(1), CloudCrypto.newVaultKey())
+        settings.putString(K_VK_CURRENT, "1")
+        putSecret(K_PENDING_RECOVERY, CloudCrypto.newRecoveryKey())
+        return runCatching { confirmRecoverySaved(remindLater = true) }.getOrElse { refresh() }
     }
 
     /**
@@ -151,6 +174,15 @@ class CloudRepository @Inject constructor(
             val code = link.pairingCode ?: throw IllegalArgumentException("Connect this phone first: scan the QR code on the dashboard's Devices page.")
             connect(link.server, code)
             connected = true
+            val secret = link.linkSecret
+            if (secret != null && refresh() is CloudState.WaitingForApproval) {
+                // "Add another phone": the browser that shows the code checks this proof and approves us.
+                val keys = loadDeviceKeys()!!
+                api().linkProof(PairLinks.linkProof(secret, keys.encPublic, keys.signPublic))
+                return@io "Added. Finishing on your computer…"
+            }
+        } else if (link.linkSecret != null) {
+            throw IllegalArgumentException("This phone is already linked. To add it to another account, tap Disconnect below first, then scan again.")
         }
         if (!link.approvesBrowser) return@io "Connected."
         if (refresh() is CloudState.Ready) {
@@ -202,7 +234,8 @@ class CloudRepository @Inject constructor(
 
     /** A scanned sign-in QR code: checks the browser's keys against the scanned fingerprint and signs it in. */
     suspend fun approveScannedLogin(link: LoginLink): String = io {
-        if (refresh() !is CloudState.Ready) throw IllegalArgumentException("Connect this phone first, then scan the sign-in code again.")
+        if (refresh() is CloudState.NotConnected) startOwnAccount(link.server)
+        if (refresh() !is CloudState.Ready) throw IllegalArgumentException("This phone is still waiting for approval. Finish that first, then scan the code again.")
         val ask = api().loginRequest(link.requestId)
         if (!PairLinks.matches(link.fingerprint, ask.encPublic, ask.signPublic)) {
             AppLog.w(TAG, "sign-in fingerprint does not match the server's keys; not approving")

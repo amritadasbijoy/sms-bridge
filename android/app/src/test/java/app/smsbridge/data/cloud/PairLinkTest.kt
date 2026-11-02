@@ -67,4 +67,19 @@ class PairLinkTest {
         assertFalse(PairLinks.matches(expected, sign, enc)) // swapped keys
         assertFalse(PairLinks.matches(expected, enc, ByteArray(32)))
     }
+
+    @Test
+    fun parsesAddAnotherPhoneLinksAndComputesTheBrowsersProof() {
+        val link = PairLinks.parse("smsbridge://pair?v=1&s=https%3A%2F%2Fsms.example.org&c=AB12C-DE34F&k=AAECAwQFBgcICQoLDA0ODw")!!
+        assertEquals("AB12C-DE34F", link.pairingCode)
+        assertArrayEquals(ByteArray(16) { it.toByte() }, link.linkSecret)
+        assertFalse(link.approvesBrowser)
+        assertNull(PairLinks.parse("smsbridge://pair?v=1&s=https%3A%2F%2Fx&c=C&k=short")!!.linkSecret) // bad secret is ignored
+
+        // Same keys and secret as web/test/link.test.ts: both sides must produce this value.
+        val text = File("../../testdata/hpke-vectors-v1.json").readText()
+        fun field(name: String) = Base64.getDecoder().decode(Regex("\"$name\": \"([^\"]+)\"").find(text)!!.groupValues[1])
+        val proof = PairLinks.linkProof(ByteArray(16) { it.toByte() }, field("encPublic"), field("signPublic"))
+        assertEquals("KFP4zjvvbRTPxhOZ1ATCcz/e8xyaJyTKUMMzzcVjnSk=", Base64.getEncoder().encodeToString(proof))
+    }
 }

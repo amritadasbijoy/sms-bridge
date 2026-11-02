@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { PairQr } from "@/components/pair-qr";
+import { AddPhoneButton } from "@/components/add-phone";
 import { Shell } from "@/components/shell";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -13,7 +13,6 @@ export default function Devices() {
   const [code, setCode] = useState<{ code: string; expiresAt: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
-  const [showQr, setShowQr] = useState(false);
 
   const load = useCallback(() => {
     api.devices().then(setDevices, (e) => setError(e instanceof ApiError ? e.message : "Could not load devices."));
@@ -45,18 +44,14 @@ export default function Devices() {
       <div className="space-y-6">
         <Card>
           <CardHeader>
-            <CardTitle>Connect a phone</CardTitle>
+            <CardTitle>Add a phone</CardTitle>
             <CardDescription>
-              On the phone: SMS Bridge → Sync → Scan QR code. A phone that was connected before must be disconnected
-              first (Sync → Disconnect).
+              Shows a QR code. Scan it with SMS Bridge on the new phone (Scan QR code), and its messages appear here.
+              A phone that is already linked to another account must tap Disconnect first.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            {showQr ? (
-              <PairQr withCode />
-            ) : (
-              <Button onClick={() => setShowQr(true)}>Show QR code</Button>
-            )}
+            <AddPhoneButton />
             <details className="text-sm">
               <summary className="cursor-pointer text-muted-foreground">Enter a code by hand instead</summary>
               <div className="mt-2 space-y-2">

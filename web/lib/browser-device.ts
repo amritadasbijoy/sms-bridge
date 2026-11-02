@@ -127,3 +127,17 @@ export async function fetchVaultKeys(r: DeviceRecord): Promise<DeviceKeysResult>
   }
   return { state: "approved", keys };
 }
+
+/**
+ * This browser's vault keys as raw bytes, to wrap them for a phone it adds ("Add another phone").
+ * The caller zeroes them when done; they are never stored.
+ */
+export async function rawVaultKeys(r: DeviceRecord): Promise<Map<number, Bytes>> {
+  const res = await api.browserKeys(r.deviceId);
+  const pub = base64ToBytes(r.encPublic);
+  const out = new Map<number, Bytes>();
+  for (const k of res.keys) {
+    out.set(k.keyVersion, await hpkeOpen(r.encKeys.privateKey, pub, base64ToBytes(k.wrappedKey), wrapContext(r.deviceId, k.keyVersion)));
+  }
+  return out;
+}

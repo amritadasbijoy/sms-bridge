@@ -31,6 +31,18 @@ class HpkeVectorsTest {
         }
     }
 
+    /** A vault key the browser sealed (web/lib/hpke.ts hpkeSeal, "Add another phone") opens with Tink. */
+    @Test
+    fun browserSealedKeyOpens() {
+        val text = file.readText()
+        fun field(t: String, name: String) = Regex("\"$name\": \"([^\"]+)\"").find(t)!!.groupValues[1]
+        val keys = DeviceKeys(dec.decode(field(text, "encPrivate")), dec.decode(field(text, "encPublic")), ByteArray(32), dec.decode(field(text, "signPublic")))
+        val sealed = File("../../testdata/hpke-browser-sealed-v1.json").readText()
+        val version = Regex("\"keyVersion\": (\\d+)").find(sealed)!!.groupValues[1].toInt()
+        val opened = CloudCrypto.unwrapForDevice(dec.decode(field(sealed, "wrapped")), keys, field(sealed, "recipientId"), version)
+        assertArrayEquals(dec.decode(field(sealed, "vaultKey")), opened)
+    }
+
     private fun generate() {
         val browser = DeviceKeys.generate()
         val recipient = "b0000000-0000-4000-8000-00000000web1"

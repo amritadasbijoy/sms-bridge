@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { VaultGate } from "@/components/vault-gate";
 import { conversations, type Conversation } from "@/lib/messages";
+import { usePhones } from "@/lib/phones";
 import { useSession } from "@/lib/session";
 import { cn, formatDateTime, formatShort } from "@/lib/utils";
 
@@ -46,7 +47,8 @@ function Thread({ c }: { c: Conversation }) {
 
 function Conversations() {
   const { store } = useSession();
-  const all = useMemo(() => conversations(store.messages), [store]);
+  const { filter } = usePhones();
+  const all = useMemo(() => conversations(filter(store.messages)), [store, filter]);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const list = useMemo(() => {
@@ -102,7 +104,7 @@ function Conversations() {
 
 export default function ConversationsPage() {
   return (
-    <Shell title="Conversations">
+    <Shell title="Conversations" phoneTabs>
       <VaultGate>
         <Conversations />
       </VaultGate>

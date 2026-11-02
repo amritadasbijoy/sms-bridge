@@ -56,6 +56,17 @@ class BrowserDeviceService(private val db: Db, private val wake: Notices = Notic
         return BrowserDevice(id.toString())
     }
 
+    /** Only an approved browser of [userId] may see and approve waiting phones. */
+    suspend fun requireTrusted(userId: UUID, deviceId: UUID) {
+        val ok = db.tx {
+            query(
+                "SELECT 1 FROM devices WHERE id = ? AND user_id = ? AND platform = 'web' AND vault_trusted_at IS NOT NULL AND revoked_at IS NULL",
+                deviceId, userId,
+            ) { 1 }.isNotEmpty()
+        }
+        if (!ok) throw ApiException(HttpStatusCode.Forbidden, "not_trusted", "This browser is not approved.")
+    }
+
     /** Vault keys wrapped for this browser; 404 once it is revoked or not this user's. */
     suspend fun keys(userId: UUID, deviceId: UUID): BrowserKeys = db.tx {
         val trusted = query(
@@ -113,7 +124,7 @@ fun java.sql.Connection.consumeInvite(code: String?, newUserId: UUID): Boolean {
     ) { 1 }.isNotEmpty()
 }
 
-fun Route.browserAndInviteRoutes(auth: AuthService, browsers: BrowserDeviceService, invites: InviteService) {
+fun Route.browserAndInviteRoutes(auth: AuthService, browsers: BrowserDeviceService, invites: InviteService, sync: SyncService) {
     route("/browser/devices") {
         post {
             val user = auth.requireUser(call)
@@ -127,6 +138,20 @@ fun Route.browserAndInviteRoutes(auth: AuthService, browsers: BrowserDeviceServi
                 ?: throw ApiException(HttpStatusCode.NotFound, "unknown_browser", "This browser is not registered or was revoked.")
             call.respond(browsers.keys(user.first, id))
         }
+        // "Add another phone": the approved browser checks a new phone's link proof and wraps the vault key for it.
+        get("/{id}/pending") {
+            val user = auth.requireUser(call).first
+            val id = call.uuidParam("id")
+            browsers.requireTrusted(user, id)
+            call.respond(sync.pendingFor(user))
+        }
+        post("/{id}/approve/{target}") {
+            val user = auth.requireUser(call).first
+            val id = call.uuidParam("id")
+            browsers.requireTrusted(user, id)
+            sync.approveBy(user, id, call.uuidParam("target"), call.receive(), call.clientIp())
+            call.respond(HttpStatusCode.NoContent)
+        }
     }
     route("/invites") {
         get { call.respond(invites.list(auth.requireUser(call).first)) }
@@ -136,6 +161,9 @@ fun Route.browserAndInviteRoutes(auth: AuthService, browsers: BrowserDeviceServi
         }
     }
 }
+
+private fun io.ktor.server.application.ApplicationCall.uuidParam(name: String): UUID =
+    runCatching { UUID.fromString(parameters[name]) }.getOrNull() ?: throw ApiException(HttpStatusCode.NotFound, "not_found", "Not found.")
 
 /** A readable default name for a browser device, e.g. "Chrome on macOS". */
 fun browserName(userAgent: String?): String {
