@@ -17,6 +17,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -42,7 +43,15 @@ fun DashboardScreen(
     ) {
         item {
             Column {
-                Text("SMS Bridge", style = MaterialTheme.typography.headlineSmall)
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text("SMS Bridge", style = MaterialTheme.typography.headlineSmall)
+                    Text(
+                        "Version ${app.smsbridge.BuildConfig.VERSION_NAME}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 8.dp, bottom = 3.dp),
+                    )
+                }
                 Text(
                     "Your private, on-device SMS archive",
                     style = MaterialTheme.typography.bodyMedium,
