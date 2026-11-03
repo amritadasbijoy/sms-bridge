@@ -212,7 +212,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setVaultError(
         e instanceof ApiError
           ? e.message
-          : "This browser cannot keep a device key (private window or blocked site data?). Use the recovery key instead.",
+          : "This browser could not open your messages. If this is a private window, use a normal one, or try Safari or Chrome.",
       );
     }
   }, [me, load]);
