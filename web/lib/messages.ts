@@ -177,8 +177,20 @@ export function simLabel(m: Pick<Message, "simSlot" | "carrier">): string | null
 
 const OTP_HINT = /\b(code|otp|pin|passcode|password|verification|verify|one[- ]time)\b|কোড|ওটিপি|পিন/i;
 
-/** The one-time code in a message ("Your code is 482913"), for the Copy button. */
+const DIGIT_WORDS: Record<string, string> = {
+  zero: "0", one: "1", two: "2", three: "3", four: "4", five: "5", six: "6", seven: "7", eight: "8", nine: "9",
+};
+const WORD = Object.keys(DIGIT_WORDS).join("|");
+// Four or more number words joined by _, -, spaces or commas: "Seven_Zero_Three_Eight_Seven_Five".
+const SPELLED = new RegExp(`\\b(?:${WORD})(?:[\\s_,-]+(?:${WORD})){3,}\\b`, "i");
+
+/**
+ * The one-time code in a message ("Your code is 482913"), for the Copy button. Codes spelled out
+ * in words ("type Seven_Zero_Three_Eight_Seven_Five") come back as digits ("703875").
+ */
 export function otpOf(body: string): string | null {
+  const spelled = body.match(SPELLED);
+  if (spelled) return spelled[0].split(/[\s_,-]+/).map((w) => DIGIT_WORDS[w.toLowerCase()]).join("");
   if (!OTP_HINT.test(body)) return null;
   const match = body.match(/(?<![\d.,:/-])(\d{4,8})(?![\d.,:/-]\d)/);
   return match ? match[1]! : null;

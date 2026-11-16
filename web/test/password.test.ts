@@ -32,6 +32,9 @@ describe("message helpers", () => {
     expect(otpOf("আপনার কোড 55821")).toBe("55821");
     expect(otpOf("Meet at 1930 near gate 4")).toBeNull();
     expect(otpOf("Your balance is 12,500.50 Tk")).toBeNull();
+    expect(otpOf("(IVACBD) For security, type the following sequence when prompted Seven_Zero_Three_Eight_Seven_Five .")).toBe("703875");
+    expect(otpOf("Your PIN: one-two three four")).toBe("1234");
+    expect(otpOf("I have one or two ideas")).toBeNull();
   });
 
   it("label SIMs", () => {
