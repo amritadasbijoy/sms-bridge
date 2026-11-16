@@ -17,6 +17,8 @@ data class PendingDeviceDto(val id: String, val name: String, val encPublic: Byt
 data class StoredEventDto(val eventId: String, val deviceId: String, val deviceSequence: Long, val serverSequence: Long, val keyVersion: Int, val ciphertext: ByteArray)
 data class LoginAskDto(val id: String, val deviceId: String, val name: String, val encPublic: ByteArray, val signPublic: ByteArray)
 data class ConnectRequestDto(val requestId: String, val secret: String, val number: Int, val expiresAt: String)
+/** A typed code: "login" (a browser signing in, with its details) or "pair" (an add-phone code). */
+data class TypedCodeDto(val kind: String, val requestId: String?, val encPublic: ByteArray?, val signPublic: ByteArray?)
 data class CodeLookupDto(val requestId: String, val name: String, val encPublic: ByteArray, val signPublic: ByteArray)
 /** A phone or browser of this account, for "Who can see my SMS". */
 data class LinkedDeviceDto(val id: String, val name: String, val label: String?, val platform: String, val trusted: Boolean, val lastSeenAt: String?, val expiresAt: String?)
@@ -132,6 +134,13 @@ class CloudApi(baseUrl: String, private val token: String? = null) {
     /** The browser's 8-digit code, typed instead of scanning (no account needed yet). */
     fun lookupCode(code: String): CodeLookupDto = call("GET", "/api/v1/auth/login-codes/${code.filter(Char::isDigit)}").let {
         CodeLookupDto(it.getString("requestId"), it.getString("name"), unb64(it.getString("encPublicKey")), unb64(it.getString("signPublicKey")))
+    }
+
+    fun lookupTyped(code: String): TypedCodeDto = call("GET", "/api/v1/link-codes/${code.filter(Char::isDigit)}").let {
+        TypedCodeDto(
+            it.getString("kind"), it.optStringOrNull("requestId"),
+            it.optStringOrNull("encPublicKey")?.let(::unb64), it.optStringOrNull("signPublicKey")?.let(::unb64),
+        )
     }
 
     fun setLabel(label: String?) {

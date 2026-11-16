@@ -98,6 +98,7 @@ fun SettingsScreen(onOpen: (String) -> Unit = {}, viewModel: SettingsViewModel =
 
     LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { Text("Settings", style = MaterialTheme.typography.headlineSmall) }
+        item { app.smsbridge.feature.update.UpdateSettingsCard() }
 
         item {
             SectionCard("Synchronization") {

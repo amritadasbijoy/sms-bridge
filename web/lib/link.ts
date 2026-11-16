@@ -28,3 +28,13 @@ export async function linkProof(secret: Bytes, encPublicB64: string, signPublicB
   const key = await crypto.subtle.importKey("raw", secret, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   return btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.sign("HMAC", key, fingerprint))));
 }
+
+/**
+ * The link secret for a phone that typed the 8-digit add-phone code instead of scanning: derived
+ * from the digits, so both sides know it. (Weaker than the QR's random secret: the server stores
+ * the digits, so this trusts the server, like typing the sign-in code does.)
+ */
+export async function typedLinkSecret(digits: string): Promise<Bytes> {
+  const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`sms-bridge typed link v1|${digits}`)));
+  return hash.slice(0, 16);
+}

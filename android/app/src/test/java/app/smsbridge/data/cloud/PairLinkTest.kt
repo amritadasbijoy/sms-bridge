@@ -82,4 +82,10 @@ class PairLinkTest {
         val proof = PairLinks.linkProof(ByteArray(16) { it.toByte() }, field("encPublic"), field("signPublic"))
         assertEquals("KFP4zjvvbRTPxhOZ1ATCcz/e8xyaJyTKUMMzzcVjnSk=", Base64.getEncoder().encodeToString(proof))
     }
+
+    @Test
+    fun typedAddPhoneCodesGiveTheSameSecretAsTheBrowser() {
+        // Same value as web/test/link.test.ts.
+        assertEquals("HuFnGgPeh0X5k6VvhBDs6Q==", Base64.getEncoder().encodeToString(PairLinks.typedLinkSecret("12345678")))
+    }
 }

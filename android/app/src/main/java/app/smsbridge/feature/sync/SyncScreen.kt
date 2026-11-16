@@ -153,11 +153,33 @@ class SyncViewModel @Inject constructor(
             return@run
         }
         val link = PairLinks.parse(text) ?: throw IllegalArgumentException("That is not an SMS Bridge QR code. Scan the one shown on your dashboard.")
-        _info.value = cloud.handleLink(link)
+        linkPhone(link)
+    }
+
+    private suspend fun linkPhone(link: app.smsbridge.data.cloud.PairLink) {
+        try {
+            _info.value = cloud.handleLink(link)
+        } catch (e: app.smsbridge.data.cloud.AlreadyLinkedException) {
+            _move.value = link // ask "Move this phone here?"
+            return
+        }
         _wasRevoked.value = false
         _recoveryReminder.value = cloud.recoveryReminder()
         if (link.linkSecret != null && cloud.state.value is CloudState.WaitingForApproval) waitForBrowserApproval()
     }
+
+    /** Non-null: this phone is linked elsewhere and the user scanned or typed another account's add-phone code. */
+    private val _move = MutableStateFlow<app.smsbridge.data.cloud.PairLink?>(null)
+    val move: StateFlow<app.smsbridge.data.cloud.PairLink?> = _move.asStateFlow()
+
+    fun moveHere() = run {
+        val link = _move.value ?: return@run
+        _move.value = null
+        _info.value = cloud.moveTo(link)
+        if (cloud.state.value is CloudState.WaitingForApproval) waitForBrowserApproval()
+    }
+
+    fun cancelMove() { _move.value = null }
 
     // ---- Simple mode: consent, typed code, names, who can see my SMS ----
 
@@ -179,8 +201,10 @@ class SyncViewModel @Inject constructor(
     /** The 8 digits under the browser's QR code. */
     fun submitCode(code: String) = run {
         _info.value = null
-        val link = cloud.linkFromCode(code)
-        _consent.value = Consent(link, cloud.prepareLogin(link).name)
+        when (val link = cloud.linkFromCode(code)) {
+            is app.smsbridge.data.cloud.LoginLink -> _consent.value = Consent(link, cloud.prepareLogin(link).name)
+            is app.smsbridge.data.cloud.PairLink -> linkPhone(link)
+        }
     }
 
     /** The user allowed the browser: share [days] (null: everything), unlink after [unlinkDays] (null: never). */

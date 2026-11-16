@@ -182,6 +182,20 @@ fun HomeScreen(viewModel: SyncViewModel = hiltViewModel(), dashboard: DashboardV
     viewModel.askName.collectAsStateWithLifecycle().value?.let { suggested ->
         NameDialog(suggested, onSave = viewModel::nameThisPhone, onSkip = viewModel::skipName)
     }
+    viewModel.move.collectAsStateWithLifecycle().value?.let {
+        AlertDialog(
+            onDismissRequest = viewModel::cancelMove,
+            title = { Text("Move this phone here?") },
+            text = {
+                Text(
+                    "This phone is linked to another SMS Bridge account. Move it to the account on your computer? " +
+                        "The messages on this phone are not touched. Computers linked to the old account stop getting its new SMS.",
+                )
+            },
+            confirmButton = { Button(onClick = viewModel::moveHere) { Text("Move here") } },
+            dismissButton = { TextButton(onClick = viewModel::cancelMove) { Text("Cancel") } },
+        )
+    }
     stopping?.let { b ->
         AlertDialog(
             onDismissRequest = { stopping = null },
@@ -249,7 +263,7 @@ private fun CodeDialog(onDismiss: () -> Unit, onSubmit: (String) -> Unit) {
         title = { Text("Type the code") },
         text = {
             Column {
-                Text("The 8 digits under the QR code on your computer.", style = MaterialTheme.typography.bodyMedium)
+                Text("The 8 digits shown under the QR code on your computer.", style = MaterialTheme.typography.bodyMedium)
                 OutlinedTextField(
                     value = code,
                     onValueChange = { v -> code = v.filter { it.isDigit() || it == ' ' }.take(9) },

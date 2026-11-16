@@ -29,6 +29,10 @@ import kotlinx.serialization.Serializable
 
 @Serializable data class Label(val label: String? = null)
 @Serializable data class CodeLookup(val requestId: String, val encPublicKey: String, val signPublicKey: String, val name: String)
+/** What a typed code is: a browser signing in ("login", with its details) or an "Add another phone" code ("pair"). */
+@Serializable data class TypedCode(
+    val kind: String, val requestId: String? = null, val encPublicKey: String? = null, val signPublicKey: String? = null, val name: String? = null,
+)
 @Serializable data class SaveAccount(val username: String, val password: String)
 @Serializable data class PasswordVaultInfo(val salt: String, val iterations: Int, val keys: List<WrappedKey>)
 @Serializable data class SetPasswordVault(
@@ -121,6 +125,20 @@ class SimpleService(private val db: Db, private val wake: Notices) {
             ) { CodeLookup(it.uuid("id").toString(), it.getString("enc_public_key"), it.getString("sign_public_key"), it.getString("name")) }
                 .singleOrNull()
         } ?: throw ApiException(HttpStatusCode.NotFound, "invalid_code", "That code is wrong or has expired. Check the code on the computer.")
+    }
+
+    /** Any typed 8-digit code: a browser's sign-in, or an "Add another phone" code (registered with /devices/register). */
+    suspend fun lookupTyped(code: String): TypedCode {
+        val digits = code.filter(Char::isDigit)
+        val login = runCatching { lookupCode(digits) }.getOrNull()
+        if (login != null) return TypedCode("login", login.requestId, login.encPublicKey, login.signPublicKey, login.name)
+        if (digits.length == 8) {
+            val pair = db.tx {
+                query("SELECT 1 FROM pairing_codes WHERE short_code = ? AND used_at IS NULL AND expires_at > now()", digits) { 1 }.isNotEmpty()
+            }
+            if (pair) return TypedCode("pair")
+        }
+        throw ApiException(HttpStatusCode.NotFound, "invalid_code", "That code is wrong or has expired. Check the code on the computer.")
     }
 
     // ---- Account and password ------------------------------------------------------------------
@@ -278,6 +296,7 @@ fun Route.simpleRoutes(auth: AuthService, sync: SyncService, simple: SimpleServi
     }
     rateLimit(AUTH_LIMIT) {
         get("/auth/login-codes/{code}") { call.respond(simple.lookupCode(call.parameters["code"].orEmpty())) }
+        get("/link-codes/{code}") { call.respond(simple.lookupTyped(call.parameters["code"].orEmpty())) }
     }
     // Account: save (username + password) and the password's vault copy.
     post("/auth/account") {

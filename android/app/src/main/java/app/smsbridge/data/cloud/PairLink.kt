@@ -80,6 +80,10 @@ object PairLinks {
     fun linkProof(secret: ByteArray, encPublic: ByteArray, signPublic: ByteArray): ByteArray =
         Mac.getInstance("HmacSHA256").apply { init(SecretKeySpec(secret, "HmacSHA256")) }.doFinal(fingerprint(encPublic, signPublic))
 
+    /** The link secret for a typed 8-digit add-phone code (web lib/link.ts typedLinkSecret). */
+    fun typedLinkSecret(digits: String): ByteArray =
+        MessageDigest.getInstance("SHA-256").digest("sms-bridge typed link v1|$digits".toByteArray(Charsets.UTF_8)).copyOf(16)
+
     fun matches(expected: ByteArray, encPublic: ByteArray, signPublic: ByteArray): Boolean =
         MessageDigest.isEqual(expected, fingerprint(encPublic, signPublic))
 }

@@ -140,6 +140,45 @@ fun UpdateDialog(viewModel: UpdateViewModel = hiltViewModel()) {
     )
 }
 
+/** Settings → "Check for updates": asks the server now and says whether a newer version exists. */
+@HiltViewModel
+class UpdateCheckViewModel @Inject constructor(
+    private val checker: UpdateChecker,
+    private val navigation: NavigationRequests,
+) : ViewModel() {
+    private val _status = MutableStateFlow<String?>(null)
+    val status: StateFlow<String?> = _status.asStateFlow()
+    private val _checking = MutableStateFlow(false)
+    val checking: StateFlow<Boolean> = _checking.asStateFlow()
+
+    fun checkNow() = viewModelScope.launch {
+        _checking.value = true
+        _status.value = null
+        val info = runCatching { checker.check(force = true) }.getOrNull()
+        _checking.value = false
+        if (info != null) {
+            _status.value = "Version ${info.versionName} is available."
+            navigation.requestShowUpdate() // the update pop-up: download and install
+        } else {
+            _status.value = "You have the latest version."
+        }
+    }
+}
+
+/** Settings card: this version, and a button to look for a newer one. */
+@Composable
+fun UpdateSettingsCard(viewModel: UpdateCheckViewModel = hiltViewModel()) {
+    val status by viewModel.status.collectAsStateWithLifecycle()
+    val checking by viewModel.checking.collectAsStateWithLifecycle()
+    SectionCard("App updates") {
+        Text("You have version ${BuildConfig.VERSION_NAME}.", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp))
+        Button(onClick = viewModel::checkNow, enabled = !checking, modifier = Modifier.padding(top = 8.dp)) {
+            Text(if (checking) "Checking…" else "Check for updates")
+        }
+        status?.let { Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp)) }
+    }
+}
+
 /** Small reminder on Home and Sync while an update is waiting (the dialog does the work). */
 @Composable
 fun UpdateBanner(viewModel: UpdateViewModel = hiltViewModel()) {

@@ -58,9 +58,7 @@ class LoginRequestService(private val db: Db, private val auth: AuthService, pri
                 query("SELECT id FROM users WHERE lower(username) = lower(?)", name) { it.uuid("id") }.singleOrNull()
             }
             if (body.username == null) {
-                code = generateSequence { Secrets.digits(8) }.first { candidate ->
-                    query("SELECT 1 FROM login_requests WHERE short_code = ? AND status = 'pending' AND expires_at > now()", candidate) { 1 }.isEmpty()
-                }
+                code = uniqueShortCode()
             }
             update(
                 """

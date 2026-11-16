@@ -55,7 +55,11 @@ fun main() {
 @Serializable data class Me(val userId: String, val username: String, val totpEnabled: Boolean = false, val hasPassword: Boolean = true)
 @Serializable data class SetPassword(val password: String, val currentPassword: String? = null)
 @Serializable data class AuthStatus(val registrationOpen: Boolean)
-@Serializable data class PairingCodeResponse(val code: String, val expiresAt: String)
+@Serializable data class PairingCodeResponse(
+    val code: String, val expiresAt: String,
+    /** 8 digits the new phone can type instead of scanning. */
+    val shortCode: String? = null,
+)
 @Serializable data class RegisterDevice(
     val pairingCode: String,
     val deviceId: String,
@@ -487,15 +491,17 @@ class DeviceService(private val db: Db) {
     suspend fun createPairingCode(userId: UUID, ip: String): PairingCodeResponse {
         val code = Secrets.pairingCode()
         val expires = OffsetDateTime.now().plus(PAIRING_LIFETIME)
-        db.tx {
+        val short = db.tx {
             update("DELETE FROM pairing_codes WHERE expires_at < now() OR used_at IS NOT NULL")
+            val short = uniqueShortCode()
             update(
-                "INSERT INTO pairing_codes (code_hash, user_id, expires_at) VALUES (?, ?, ?)",
-                Secrets.sha256(Secrets.normalizePairingCode(code)), userId, expires,
+                "INSERT INTO pairing_codes (code_hash, user_id, expires_at, short_code) VALUES (?, ?, ?, ?)",
+                Secrets.sha256(Secrets.normalizePairingCode(code)), userId, expires, short,
             )
             audit(userId, null, "pairing_code_created", "ok", ip)
+            short
         }
-        return PairingCodeResponse(code, expires.toString())
+        return PairingCodeResponse(code, expires.toString(), short)
     }
 
     suspend fun register(request: RegisterDevice, ip: String): DeviceToken {
@@ -510,10 +516,11 @@ class DeviceService(private val db: Db) {
         val token = Secrets.token()
         db.tx {
             // Consume the code atomically: a code works once, before it expires.
+            val digits = request.pairingCode.trim().replace(" ", "").takeIf { Regex("\\d{8}").matches(it) }
             val userId = query(
-                "UPDATE pairing_codes SET used_at = now() WHERE code_hash = ? AND used_at IS NULL AND expires_at > now() RETURNING user_id",
-                codeHash,
-            ) { it.uuid("user_id") }.singleOrNull()
+                "UPDATE pairing_codes SET used_at = now() WHERE (code_hash = ? OR short_code = ?) AND used_at IS NULL AND expires_at > now() RETURNING user_id",
+                codeHash, digits,
+            ) { it.uuid("user_id") }.firstOrNull()
             if (userId == null) {
                 audit(null, deviceId, "device_register", "bad_code", ip)
                 throw ApiException(HttpStatusCode.Unauthorized, "invalid_code", "The pairing code is wrong or has expired.")
@@ -632,4 +639,10 @@ class DeviceService(private val db: Db) {
         label = getString("label"),
         expiresAt = time("expires_at")?.toString(),
     )
+}
+
+/** 8 digits not used by any live sign-in or add-phone code, so a typed code means one thing. */
+fun java.sql.Connection.uniqueShortCode(): String = generateSequence { Secrets.digits(8) }.first { c ->
+    query("SELECT 1 FROM pairing_codes WHERE short_code = ? AND used_at IS NULL AND expires_at > now()", c) { 1 }.isEmpty() &&
+        query("SELECT 1 FROM login_requests WHERE short_code = ? AND status = 'pending' AND expires_at > now()", c) { 1 }.isEmpty()
 }

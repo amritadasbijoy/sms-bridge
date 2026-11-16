@@ -190,4 +190,27 @@ class SimpleTest {
         SimpleService(db, Notices()).cleanup()
         assertEquals(1L, db.tx { query("SELECT count(*) FROM sync_events") { it.getLong(1) }.single() })
     }
+
+    @Test
+    fun aNewPhoneTypesTheAddPhoneCode() = api {
+        val phoneClient = createClient { }
+        val phone = phoneClient.newPhone()
+        val browser = createClient { install(HttpCookies) }
+        val req = obj(browser.postJson("/api/v1/auth/login-requests", """{"name":"Chrome","encPublicKey":"${key()}","signPublicKey":"${key()}"}"""))
+        val id = req["requestId"]!!.jsonPrimitive.content
+        // A typed sign-in code reads as "login".
+        assertEquals("login", obj(phoneClient.get("/api/v1/link-codes/${req["code"]!!.jsonPrimitive.content}"))["kind"]!!.jsonPrimitive.content)
+        phoneClient.postJson("/api/v1/vault/login-requests/$id/approve", oneKey, bearer = phone)
+        browser.get("/api/v1/auth/login-requests/$id") { header(REQUEST_SECRET_HEADER, req["secret"]!!.jsonPrimitive.content) }
+
+        val pairing = obj(browser.postJson("/api/v1/devices/pairing-codes", "{}"))
+        val short = pairing["shortCode"]!!.jsonPrimitive.content
+        assertEquals(8, short.length)
+        assertEquals("pair", obj(phoneClient.get("/api/v1/link-codes/${short.take(4)} ${short.drop(4)}"))["kind"]!!.jsonPrimitive.content)
+        assertEquals(HttpStatusCode.NotFound, phoneClient.get("/api/v1/link-codes/12").status)
+        val register = """{"pairingCode":"$short","deviceId":"${UUID.randomUUID()}","name":"Pixel 7","platform":"android","encPublicKey":"${key()}","signPublicKey":"${key()}"}"""
+        assertEquals(HttpStatusCode.Created, phoneClient.postJson("/api/v1/devices/register", register).status)
+        assertEquals(HttpStatusCode.Unauthorized, phoneClient.postJson("/api/v1/devices/register", register).status) // used up
+        assertEquals(HttpStatusCode.NotFound, phoneClient.get("/api/v1/link-codes/$short").status)
+    }
 }

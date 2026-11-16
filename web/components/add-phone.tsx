@@ -7,7 +7,7 @@ import { api, ApiError } from "@/lib/api";
 import { ensureDevice, rawVaultKeys } from "@/lib/browser-device";
 import { base64ToBytes } from "@/lib/crypto";
 import { hpkeSeal, wrapContext } from "@/lib/hpke";
-import { addPhoneLink, linkProof, newLinkSecret } from "@/lib/link";
+import { addPhoneLink, linkProof, newLinkSecret, typedLinkSecret } from "@/lib/link";
 import { PHONES_CHANGED } from "@/lib/phones";
 import { useSession } from "@/lib/session";
 
@@ -23,6 +23,9 @@ function AddPhoneDialog({ onClose }: { onClose: () => void }) {
   const secret = useRef(newLinkSecret());
   const handled = useRef(new Set<string>());
   const [code, setCode] = useState<string | null>(null);
+  // Every 8-digit code shown so far: a phone may have typed an earlier one.
+  const [shortCodes, setShortCodes] = useState<string[]>([]);
+  const typedSecrets = useRef(new Map<string, Uint8Array<ArrayBuffer>>());
   const [qr, setQr] = useState<string | null>(null);
   const [linked, setLinked] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -33,7 +36,14 @@ function AddPhoneDialog({ onClose }: { onClose: () => void }) {
     let stopped = false;
     const renew = () =>
       api.pairingCode().then(
-        (c) => !stopped && setCode(c.code),
+        async (c) => {
+          if (stopped) return;
+          setCode(c.code);
+          if (c.shortCode) {
+            typedSecrets.current.set(c.shortCode, await typedLinkSecret(c.shortCode));
+            setShortCodes((s) => [...s, c.shortCode!]);
+          }
+        },
         () => !stopped && setError("Could not create a code. Close this and try again."),
       );
     void renew();
@@ -64,7 +74,10 @@ function AddPhoneDialog({ onClose }: { onClose: () => void }) {
         for (const p of await api.browserPending(device.deviceId)) {
           if (stopped || handled.current.has(p.id) || !p.linkProof) continue;
           // Another QR code's phone, or keys the server swapped: never approve those.
-          if ((await linkProof(secret.current, p.encPublicKey, p.signPublicKey)) !== p.linkProof) continue;
+          const secrets = [secret.current, ...typedSecrets.current.values()];
+          let matches = false;
+          for (const s of secrets) if ((await linkProof(s, p.encPublicKey, p.signPublicKey)) === p.linkProof) matches = true;
+          if (!matches) continue;
           handled.current.add(p.id);
           const raw = await rawVaultKeys(device);
           try {
@@ -113,10 +126,13 @@ function AddPhoneDialog({ onClose }: { onClose: () => void }) {
                   On the new phone, install SMS Bridge (<a className="underline" href="/download/sms-bridge.apk">download</a>).
                 </li>
                 <li>
-                  Open it and tap <strong>Scan QR code</strong>.
+                  Open it and tap <strong>Scan QR code</strong>, or <strong>Type code</strong>.
                 </li>
-                <li>Point it at this code.</li>
+                <li>Scan this QR code, or type the 8 digits under it.</li>
               </ol>
+              <p className="text-xs text-muted-foreground">
+                If that phone is already linked somewhere else, the app asks to move it here. Its messages stay on the phone.
+              </p>
               <div className="flex justify-center">
                 {qr ? (
                   // eslint-disable-next-line @next/next/no-img-element
@@ -125,6 +141,14 @@ function AddPhoneDialog({ onClose }: { onClose: () => void }) {
                   <div className="h-[240px] w-[240px] animate-pulse rounded-md bg-muted" />
                 )}
               </div>
+              {shortCodes.length > 0 && (
+                <div className="text-center">
+                  <p className="text-xs text-muted-foreground">Can&apos;t scan? Type this code in the app:</p>
+                  <p className="font-mono text-3xl font-semibold tracking-widest">
+                    {shortCodes.at(-1)!.slice(0, 4)} {shortCodes.at(-1)!.slice(4)}
+                  </p>
+                </div>
+              )}
               {linked.map((name) => (
                 <Alert key={name} tone="info">
                   ✓ {name} is added. Its new messages appear here within seconds.

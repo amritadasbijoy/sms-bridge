@@ -10,7 +10,6 @@ import { formatDateTime } from "@/lib/utils";
 
 export default function Devices() {
   const [devices, setDevices] = useState<Device[] | null>(null);
-  const [code, setCode] = useState<{ code: string; expiresAt: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
 
@@ -18,15 +17,6 @@ export default function Devices() {
     api.devices().then(setDevices, (e) => setError(e instanceof ApiError ? e.message : "Could not load devices."));
   }, []);
   useEffect(load, [load]);
-
-  async function newCode() {
-    setError(null);
-    try {
-      setCode(await api.pairingCode());
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Could not create a code.");
-    }
-  }
 
   async function revoke(id: string) {
     setError(null);
@@ -40,32 +30,17 @@ export default function Devices() {
   }
 
   return (
-    <Shell title="Devices">
+    <Shell title="Phones & browsers">
       <div className="space-y-6">
         <Card>
           <CardHeader>
             <CardTitle>Add a phone</CardTitle>
             <CardDescription>
-              Shows a QR code. Scan it with SMS Bridge on the new phone (Scan QR code), and its messages appear here.
-              A phone that is already linked to another account must tap Disconnect first.
+              Show its messages here too, with their own tab. On the new phone, open SMS Bridge and tap Scan QR code or Type code.
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-3">
+          <CardContent>
             <AddPhoneButton />
-            <details className="text-sm">
-              <summary className="cursor-pointer text-muted-foreground">Enter a code by hand instead</summary>
-              <div className="mt-2 space-y-2">
-                {code && (
-                  <div className="rounded-md border bg-muted px-4 py-3">
-                    <p className="font-mono text-2xl tracking-widest">{code.code}</p>
-                    <p className="text-xs text-muted-foreground">
-                      Server {typeof window !== "undefined" ? window.location.origin : ""} · expires {formatDateTime(code.expiresAt)}
-                    </p>
-                  </div>
-                )}
-                <Button variant="outline" onClick={newCode}>{code ? "New code" : "Create pairing code"}</Button>
-              </div>
-            </details>
           </CardContent>
         </Card>
 
@@ -75,8 +50,7 @@ export default function Devices() {
           <CardHeader>
             <CardTitle>Phones and browsers</CardTitle>
             <CardDescription>
-              A new phone can read synced messages only after an approved phone checks its safety code, or after it is
-              unlocked with the recovery key.
+              Everything that can see your messages. Remove anything you don't recognise; it loses access at once.
             </CardDescription>
           </CardHeader>
           <CardContent>

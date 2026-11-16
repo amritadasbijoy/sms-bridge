@@ -67,6 +67,9 @@ data class RemoteSms(val deviceName: String, val address: String?, val body: Str
 /** This phone waits for its owner to tap [number] in the browser. */
 data class ConnectWait(val server: String, val requestId: String, val secret: String, val number: Int)
 
+/** This phone is linked to an account already; the user may move it to the scanned one. */
+class AlreadyLinkedException : IllegalStateException("This phone is already linked to an account.")
+
 /**
  * The phone's side of docs/sync-design.md. Secrets (device private keys, vault keys, device token,
  * a not-yet-confirmed recovery key) are stored only after [KeyProtector] encryption.
@@ -183,7 +186,8 @@ class CloudRepository @Inject constructor(
                 return@io "Added. Finishing on your computer…"
             }
         } else if (link.linkSecret != null) {
-            throw IllegalArgumentException("This phone is already linked. To add it to another account, tap Disconnect below first, then scan again.")
+            // Already linked to an account: the screen asks "Move this phone here?" and calls moveTo().
+            throw AlreadyLinkedException()
         }
         if (!link.approvesBrowser) return@io "Connected."
         if (refresh() is CloudState.Ready) {
@@ -192,6 +196,12 @@ class CloudRepository @Inject constructor(
             settings.putString(K_SCAN_APPROVAL, "${link.deviceId}|${b64(link.fingerprint!!)}")
             if (connected) "Connected. The browser opens once setup finishes." else "The browser will be approved once this phone is approved."
         }
+    }
+
+    /** "Move this phone here": leaves the current account (the archive on the phone is untouched) and joins [link]'s. */
+    suspend fun moveTo(link: PairLink): String = io {
+        disconnect()
+        handleLink(link)
     }
 
     /** Approves the pending device with this id if its keys match the scanned fingerprint. Returns its name. */
@@ -259,14 +269,20 @@ class CloudRepository @Inject constructor(
      * The 8 digits shown under the browser's QR code. Without a camera there is no fingerprint to
      * compare, so this trusts the server to report the browser's keys (the QR code does not).
      */
-    suspend fun linkFromCode(code: String): LoginLink = io {
+    suspend fun linkFromCode(code: String): Any = io {
         val server = CloudApi.normalize(settings.getString(K_SERVER) ?: settings.getString(K_LAST_SERVER) ?: "https://${BuildConfig.DEFAULT_SITE}")
+        val digits = code.filter(Char::isDigit)
         val found = try {
-            CloudApi(server).lookupCode(code)
+            CloudApi(server).lookupTyped(digits)
         } catch (e: CloudHttpException) {
             throw IllegalArgumentException(e.message)
         }
-        LoginLink(server, found.requestId, PairLinks.fingerprint(found.encPublic, found.signPublic))
+        if (found.kind == "pair") {
+            // "Add another phone" code: join with it, and prove it to the browser like a scanned QR code.
+            PairLink(server, digits, null, null, PairLinks.typedLinkSecret(digits))
+        } else {
+            LoginLink(server, found.requestId!!, PairLinks.fingerprint(found.encPublic!!, found.signPublic!!))
+        }
     }
 
     // ---- Who can see my SMS, names and range ---------------------------------------------------

@@ -43,6 +43,9 @@ class NavigationRequests @Inject constructor() {
 
     fun takeShowUpdate() { _showUpdate.value = false }
 
+    /** Opens the app-wide update pop-up (Settings → Check for updates). */
+    fun requestShowUpdate() { _showUpdate.value = true }
+
     fun handle(intent: Intent?) {
         intent ?: return
         _pending.value = when (intent.action) {

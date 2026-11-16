@@ -37,3 +37,10 @@ describe("Add another phone", () => {
     expect(Buffer.from(out).toString("base64")).toBe(sealed.vaultKey);
   });
 });
+
+describe("typed add-phone codes", () => {
+  it("give the same secret as the phone (PairLinkTest)", async () => {
+    const { typedLinkSecret } = await import("@/lib/link");
+    expect(btoa(String.fromCharCode(...(await typedLinkSecret("12345678"))))).toBe("HuFnGgPeh0X5k6VvhBDs6Q==");
+  });
+});

@@ -33,9 +33,10 @@ class UpdateChecker @Inject constructor(
     private val settings: AppSettingsRepository,
     private val time: TimeSource,
 ) {
-    /** The newer version, or null if this one is current, no server is known, or the check failed. */
+    /** The newer version, or null if this one is current or the check failed. */
     suspend fun check(force: Boolean = false): UpdateInfo? = withContext(Dispatchers.IO) {
-        val server = settings.getString(K_SERVER) ?: return@withContext null
+        // Never linked yet: ask the site the app was downloaded from.
+        val server = settings.getString(K_SERVER) ?: "https://${BuildConfig.DEFAULT_SITE}"
         val now = time.nowMillis()
         val last = settings.getString(K_LAST_CHECK)?.toLongOrNull() ?: 0L
         val cached = settings.getString(K_LATEST)
