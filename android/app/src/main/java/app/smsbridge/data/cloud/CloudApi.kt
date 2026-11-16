@@ -157,6 +157,11 @@ class CloudApi(baseUrl: String, private val token: String? = null) {
         }
     }
 
+    /** This phone leaves its account; the server deletes its messages. */
+    fun leave() {
+        call("POST", "/api/v1/vault/leave", JSONObject())
+    }
+
     fun revokeLinked(id: String) {
         call("POST", "/api/v1/vault/linked/$id/revoke", JSONObject())
     }

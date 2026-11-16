@@ -213,4 +213,40 @@ class SimpleTest {
         assertEquals(HttpStatusCode.Unauthorized, phoneClient.postJson("/api/v1/devices/register", register).status) // used up
         assertEquals(HttpStatusCode.NotFound, phoneClient.get("/api/v1/link-codes/$short").status)
     }
+
+    @Test
+    fun removingAPhoneDeletesItsMessagesFromTheServer() = api {
+        val phoneClient = createClient { }
+        val phone = phoneClient.newPhone()
+        val browser = createClient { install(HttpCookies) }
+        val req = obj(browser.postJson("/api/v1/auth/login-requests", """{"name":"Chrome","encPublicKey":"${key()}","signPublicKey":"${key()}"}"""))
+        val id = req["requestId"]!!.jsonPrimitive.content
+        phoneClient.postJson("/api/v1/vault/login-requests/$id/approve", oneKey, bearer = phone)
+        browser.get("/api/v1/auth/login-requests/$id") { header(REQUEST_SECRET_HEADER, req["secret"]!!.jsonPrimitive.content) }
+        val code = obj(browser.postJson("/api/v1/devices/pairing-codes", "{}"))["code"]!!.jsonPrimitive.content
+        val second = obj(phoneClient.postJson("/api/v1/devices/register", """{"pairingCode":"$code","deviceId":"${UUID.randomUUID()}","name":"Pixel 7","platform":"android","encPublicKey":"${key()}","signPublicKey":"${key()}"}"""))
+        val secondId = UUID.fromString(second["deviceId"]!!.jsonPrimitive.content)
+        val (user, firstId) = db.tx { query("SELECT user_id, id FROM devices WHERE name = 'Samsung SM-A525F'") { it.uuid("user_id") to it.uuid("id") }.single() }
+        fun events(device: UUID) = runBlocking { db.tx { query("SELECT count(*) FROM sync_events WHERE device_id = ?", device) { it.getLong(1) }.single() } }
+        db.tx {
+            listOf(firstId, firstId, secondId, secondId, secondId).forEachIndexed { i, d ->
+                update(
+                    "INSERT INTO sync_events (event_id, user_id, device_id, device_sequence, event_type, key_version, ciphertext, signature) VALUES (?, ?, ?, ?, 'opaque', 1, ?, ?)",
+                    UUID.randomUUID(), user, d, i + 1L, ByteArray(40), ByteArray(64),
+                )
+            }
+        }
+        // The website removes the second phone: its 3 messages leave the server, the first phone's stay.
+        assertEquals(HttpStatusCode.NoContent, browser.postJson("/api/v1/devices/$secondId/revoke", "{}").status)
+        assertEquals(0L, events(secondId))
+        assertEquals(2L, events(firstId))
+        // The first phone unlinks itself: its messages leave the server and its token stops working.
+        assertEquals(HttpStatusCode.NoContent, phoneClient.postJson("/api/v1/vault/leave", "{}", bearer = phone).status)
+        assertEquals(0L, events(firstId))
+        assertEquals(HttpStatusCode.Unauthorized, phoneClient.get("/api/v1/vault") { header(HttpHeaders.Authorization, "Bearer $phone") }.status)
+        // A browser that started linking two days ago and never finished is cleaned up.
+        db.tx { update("INSERT INTO devices (id, user_id, name, platform, created_at) VALUES (?, ?, 'Old', 'web', now() - interval '2 days')", UUID.randomUUID(), user) }
+        SimpleService(db, Notices()).cleanup()
+        assertEquals(0L, db.tx { query("SELECT count(*) FROM devices WHERE name = 'Old' AND revoked_at IS NULL") { it.getLong(1) }.single() })
+    }
 }

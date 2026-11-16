@@ -600,12 +600,7 @@ class DeviceService(private val db: Db) {
     suspend fun revoke(userId: UUID, deviceId: UUID, reason: String?, ip: String) = db.tx {
         val owned = query("SELECT 1 FROM devices WHERE id = ? AND user_id = ?", deviceId, userId) { 1 }.isNotEmpty()
         if (!owned) throw ApiException(HttpStatusCode.NotFound, "not_found", "No such device.")
-        update("UPDATE devices SET revoked_at = COALESCE(revoked_at, now()) WHERE id = ?", deviceId)
-        update("UPDATE device_tokens SET revoked_at = now() WHERE device_id = ? AND revoked_at IS NULL", deviceId)
-        update(
-            "INSERT INTO revoked_devices (device_id, revoked_by, reason) VALUES (?, ?, ?) ON CONFLICT (device_id) DO NOTHING",
-            deviceId, userId, reason,
-        )
+        removeDevice(userId, deviceId, reason)
         audit(userId, deviceId, "device_revoke", "ok", ip)
     }
 
@@ -645,4 +640,21 @@ class DeviceService(private val db: Db) {
 fun java.sql.Connection.uniqueShortCode(): String = generateSequence { Secrets.digits(8) }.first { c ->
     query("SELECT 1 FROM pairing_codes WHERE short_code = ? AND used_at IS NULL AND expires_at > now()", c) { 1 }.isEmpty() &&
         query("SELECT 1 FROM login_requests WHERE short_code = ? AND status = 'pending' AND expires_at > now()", c) { 1 }.isEmpty()
+}
+
+/**
+ * Removes a phone or browser from its account: it stops working at once and loses its wrapped vault
+ * keys. A removed phone's messages are deleted from the server too (the phone itself keeps them).
+ * Returns how many server copies were deleted.
+ */
+fun java.sql.Connection.removeDevice(userId: UUID, deviceId: UUID, reason: String?): Int {
+    update("UPDATE devices SET revoked_at = COALESCE(revoked_at, now()) WHERE id = ? AND user_id = ?", deviceId, userId)
+    update("UPDATE device_tokens SET revoked_at = now() WHERE device_id = ? AND revoked_at IS NULL", deviceId)
+    update("DELETE FROM vault_keys WHERE user_id = ? AND recipient = ?", userId, deviceId.toString())
+    update(
+        "INSERT INTO revoked_devices (device_id, revoked_by, reason) VALUES (?, ?, ?) ON CONFLICT (device_id) DO NOTHING",
+        deviceId, userId, reason,
+    )
+    val phone = query("SELECT platform <> 'web' FROM devices WHERE id = ?", deviceId) { it.getBoolean(1) }.singleOrNull() ?: false
+    return if (phone) update("DELETE FROM sync_events WHERE user_id = ? AND device_id = ?", userId, deviceId) else 0
 }

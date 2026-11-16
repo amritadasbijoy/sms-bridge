@@ -235,3 +235,12 @@ export async function savePasswordVault(r: DeviceRecord, password: string): Prom
     raw.forEach((k) => k.fill(0));
   }
 }
+
+/** This browser's device id for the account, if it has one (never registers a new one). */
+export async function storedDeviceId(userId: string): Promise<string | null> {
+  try {
+    return (await load(userId))?.deviceId ?? null;
+  } catch {
+    return null;
+  }
+}

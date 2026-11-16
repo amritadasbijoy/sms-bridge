@@ -291,6 +291,18 @@ class CloudRepository @Inject constructor(
 
     suspend fun stopSharing(deviceId: String) = io { api().revokeLinked(deviceId) }
 
+    /** This phone's id on the server, to tell it apart in the account's list. */
+    suspend fun myDeviceId(): String = cloudDeviceId()
+
+    /**
+     * "Unlink this phone": leaves the account and deletes this phone's messages from the server.
+     * The messages on the phone stay. Works offline too (then only this phone forgets the link).
+     */
+    suspend fun unlink(): CloudState = io {
+        runCatching { api().leave() }.onFailure { AppLog.w(TAG, "leave failed: ${it.javaClass.simpleName}") }
+        disconnect()
+    }
+
     suspend fun phoneName(): String = settings.getString(K_PHONE_NAME) ?: devices.localDevice.first()?.name ?: "This phone"
 
     /** True until the user named this phone (asked once after the first link). */

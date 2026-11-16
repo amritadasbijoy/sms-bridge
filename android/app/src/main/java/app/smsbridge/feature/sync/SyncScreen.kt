@@ -224,15 +224,25 @@ class SyncViewModel @Inject constructor(
     fun loadLinked() = viewModelScope.launch { runCatching { loadLinkedNow() } }
 
     private suspend fun loadLinkedNow() {
+        _myId.value = cloud.myDeviceId()
         _phoneName.value = cloud.phoneName()
         _shareDays.value = cloud.shareDays()
         _linked.value = cloud.linked()
     }
 
-    fun stopSharing(id: String) = run {
+    fun stopSharing(id: String, isPhone: Boolean = false) = run {
         cloud.stopSharing(id)
-        _info.value = "Stopped. That browser can no longer see your SMS."
+        _info.value = if (isPhone) "Removed. That phone's messages were deleted from the server." else "Stopped. That browser can no longer see your SMS."
         loadLinkedNow()
+    }
+
+    private val _myId = MutableStateFlow("")
+    val myId: StateFlow<String> = _myId.asStateFlow()
+
+    fun unlinkThisPhone() = run {
+        cloud.unlink()
+        _linked.value = emptyList()
+        _info.value = "This phone is unlinked. Its messages were removed from the server; they are still on this phone."
     }
 
     fun changeShareDays(days: Int?) = run {

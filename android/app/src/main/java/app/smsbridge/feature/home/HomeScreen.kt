@@ -82,6 +82,8 @@ fun HomeScreen(viewModel: SyncViewModel = hiltViewModel(), dashboard: DashboardV
     var typing by rememberSaveable { mutableStateOf(false) }
     var stopping by remember { mutableStateOf<LinkedDeviceDto?>(null) }
     var choosingRange by rememberSaveable { mutableStateOf(false) }
+    var unlinking by rememberSaveable { mutableStateOf(false) }
+    val myId by viewModel.myId.collectAsStateWithLifecycle()
     val ready = state is CloudState.Ready
 
     LaunchedEffect(state) { viewModel.loadLinked() }
@@ -134,7 +136,7 @@ fun HomeScreen(viewModel: SyncViewModel = hiltViewModel(), dashboard: DashboardV
 
         if (ready) {
             val browsers = linked.filter { it.platform == "web" && it.trusted }
-            val phones = linked.filter { it.platform != "web" }
+            val otherPhones = linked.filter { it.platform != "web" && it.id != myId }
             item {
                 SectionCard("Who can see your SMS") {
                     if (browsers.isEmpty()) {
@@ -150,6 +152,16 @@ fun HomeScreen(viewModel: SyncViewModel = hiltViewModel(), dashboard: DashboardV
                     OutlinedButton(onClick = { stopping = b }, enabled = !busy, modifier = Modifier.padding(top = 8.dp)) { Text("Stop sharing") }
                 }
             }
+            if (otherPhones.isNotEmpty()) {
+                item { Text("Other phones on this account", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 4.dp)) }
+                items(otherPhones, key = { it.id }) { p ->
+                    SectionCard(p.label ?: p.name) {
+                        val seen = millis(p.lastSeenAt)?.let { "Last seen ${formatTimestamp(it)}" } ?: "Not seen yet"
+                        Text(if (p.label != null) "${p.name} · $seen" else seen, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 2.dp))
+                        OutlinedButton(onClick = { stopping = p }, enabled = !busy, modifier = Modifier.padding(top = 8.dp)) { Text("Remove") }
+                    }
+                }
+            }
             item {
                 SectionCard("This phone") {
                     Text(phoneName, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 4.dp))
@@ -161,12 +173,8 @@ fun HomeScreen(viewModel: SyncViewModel = hiltViewModel(), dashboard: DashboardV
                         OutlinedButton(onClick = viewModel::renamePhone, enabled = !busy) { Text("Rename") }
                         OutlinedButton(onClick = { choosingRange = true }, enabled = !busy) { Text("Change range") }
                     }
-                    if (phones.size > 1) {
-                        Text(
-                            "Other phones on this account: " + phones.filter { it.label != phoneName }.joinToString { it.label ?: it.name },
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(top = 8.dp),
-                        )
+                    TextButton(onClick = { unlinking = true }, enabled = !busy, modifier = Modifier.padding(top = 4.dp)) {
+                        Text("Unlink this phone", color = MaterialTheme.colorScheme.error)
                     }
                 }
             }
@@ -197,12 +205,36 @@ fun HomeScreen(viewModel: SyncViewModel = hiltViewModel(), dashboard: DashboardV
         )
     }
     stopping?.let { b ->
+        val phone = b.platform != "web"
         AlertDialog(
             onDismissRequest = { stopping = null },
-            title = { Text("Stop sharing with ${b.label ?: b.name}?") },
-            text = { Text("It can no longer see your SMS. To use it again, link it again with the QR code.") },
-            confirmButton = { TextButton(onClick = { stopping = null; viewModel.stopSharing(b.id) }) { Text("Stop sharing") } },
+            title = { Text(if (phone) "Remove ${b.label ?: b.name}?" else "Stop sharing with ${b.label ?: b.name}?") },
+            text = {
+                Text(
+                    if (phone) "It stops sending SMS to your computer, and all of its messages are deleted from the server. The messages on that phone are not touched."
+                    else "It can no longer see your SMS. To use it again, link it again with the QR code.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { stopping = null; viewModel.stopSharing(b.id, isPhone = phone) }) {
+                    Text(if (phone) "Remove and delete its messages" else "Stop sharing")
+                }
+            },
             dismissButton = { TextButton(onClick = { stopping = null }) { Text("Cancel") } },
+        )
+    }
+    if (unlinking) {
+        AlertDialog(
+            onDismissRequest = { unlinking = false },
+            title = { Text("Unlink this phone?") },
+            text = {
+                Text(
+                    "Your computers stop getting this phone's SMS, and all of its messages are deleted from the server. " +
+                        "The messages on this phone stay. You can link it again any time.",
+                )
+            },
+            confirmButton = { TextButton(onClick = { unlinking = false; viewModel.unlinkThisPhone() }) { Text("Unlink and delete from server") } },
+            dismissButton = { TextButton(onClick = { unlinking = false }) { Text("Cancel") } },
         )
     }
     if (choosingRange) {

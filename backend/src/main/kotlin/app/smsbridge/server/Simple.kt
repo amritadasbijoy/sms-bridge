@@ -91,15 +91,19 @@ class SimpleService(private val db: Db, private val wake: Notices) {
     suspend fun revokeByPhone(d: DeviceContext, target: UUID, ip: String) {
         if (!d.trusted) throw ApiException(HttpStatusCode.Forbidden, "not_trusted", "Approve this phone first.")
         db.tx {
-            val changed = update("UPDATE devices SET revoked_at = now() WHERE id = ? AND user_id = ? AND revoked_at IS NULL", target, d.userId)
-            if (changed == 0) throw ApiException(HttpStatusCode.NotFound, "not_found", "No such device.")
-            update("UPDATE device_tokens SET revoked_at = now() WHERE device_id = ? AND revoked_at IS NULL", target)
-            update("DELETE FROM vault_keys WHERE user_id = ? AND recipient = ?", d.userId, target.toString())
-            update(
-                "INSERT INTO revoked_devices (device_id, revoked_by, reason) VALUES (?, ?, 'stopped on phone') ON CONFLICT (device_id) DO NOTHING",
-                target, d.userId,
-            )
+            val live = query("SELECT 1 FROM devices WHERE id = ? AND user_id = ? AND revoked_at IS NULL", target, d.userId) { 1 }.isNotEmpty()
+            if (!live) throw ApiException(HttpStatusCode.NotFound, "not_found", "No such device.")
+            removeDevice(d.userId, target, "removed on phone")
             audit(d.userId, target, "device_revoke_by_phone", "ok", ip)
+        }
+        wake.bump(d.userId)
+    }
+
+    /** "Unlink this phone": the phone leaves its account, and its messages leave the server. */
+    suspend fun leave(d: DeviceContext, ip: String) {
+        db.tx {
+            removeDevice(d.userId, d.deviceId, "unlinked on phone")
+            audit(d.userId, d.deviceId, "phone_left", "ok", ip)
         }
         wake.bump(d.userId)
     }
@@ -235,7 +239,13 @@ class SimpleService(private val db: Db, private val wake: Notices) {
     /** Unlinks browsers past their auto-unlink time and drops server copies older than each account's range. */
     suspend fun cleanup() {
         val touched = db.tx {
-            val expired = query("SELECT id, user_id FROM devices WHERE expires_at < now() AND revoked_at IS NULL") { it.uuid("id") to it.uuid("user_id") }
+            // Auto-unlink time passed, or a browser started linking a day ago and never finished.
+            val expired = query(
+                """
+                SELECT id, user_id FROM devices WHERE revoked_at IS NULL AND (expires_at < now()
+                   OR (platform = 'web' AND vault_trusted_at IS NULL AND created_at < now() - interval '1 day'))
+                """.trimIndent(),
+            ) { it.uuid("id") to it.uuid("user_id") }
             expired.forEach { (id, user) ->
                 update("UPDATE devices SET revoked_at = now() WHERE id = ?", id)
                 update("UPDATE device_tokens SET revoked_at = now() WHERE device_id = ? AND revoked_at IS NULL", id)
@@ -288,6 +298,10 @@ fun Route.simpleRoutes(auth: AuthService, sync: SyncService, simple: SimpleServi
         val id = runCatching { UUID.fromString(call.parameters["id"]) }.getOrNull()
             ?: throw ApiException(HttpStatusCode.NotFound, "not_found", "No such device.")
         simple.revokeByPhone(sync.device(call), id, call.clientIp())
+        call.respond(HttpStatusCode.NoContent)
+    }
+    post("/vault/leave") {
+        simple.leave(sync.device(call), call.clientIp())
         call.respond(HttpStatusCode.NoContent)
     }
     put("/vault/retention") {
