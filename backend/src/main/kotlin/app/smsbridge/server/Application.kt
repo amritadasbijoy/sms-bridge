@@ -72,6 +72,9 @@ fun main() {
 @Serializable data class DeviceInfo(
     val id: String, val name: String, val platform: String, val createdAt: String,
     val lastSeenAt: String?, val revokedAt: String?, val vaultTrusted: Boolean = false,
+    /** Name chosen by the user, shown before [name] (the model). */
+    val label: String? = null,
+    val expiresAt: String? = null,
 )
 @Serializable data class RevokeRequest(val reason: String? = null)
 @Serializable data class Health(val status: String, val database: String)
@@ -88,7 +91,7 @@ private val SESSION_IDLE = java.time.Duration.ofHours(24)
 private val PAIRING_LIFETIME = java.time.Duration.ofMinutes(10)
 private const val MAX_BODY_BYTES = 64 * 1024L
 private const val MAX_SYNC_BODY_BYTES = 4L * 1024 * 1024
-private val AUTH_LIMIT = RateLimitName("auth")
+internal val AUTH_LIMIT = RateLimitName("auth")
 
 // ---- Module ----------------------------------------------------------------------------------
 
@@ -144,6 +147,8 @@ fun Application.module(config: Config, db: Db) {
     val connects = ConnectRequestService(db, devices, wake)
     val logins = LoginRequestService(db, auth, wake)
     val releases = ReleaseService(db, wake)
+    val simple = SimpleService(db, wake)
+    startCleanup(simple)
     install(io.ktor.server.websocket.WebSockets) { pingPeriodMillis = 30_000 }
 
     routing {
@@ -163,6 +168,7 @@ fun Application.module(config: Config, db: Db) {
             browserAndInviteRoutes(auth, browsers, invites, sync)
             confirmRoutes(auth, sync, wake, confirm, connects, releases)
             releaseRoutes(config, releases)
+            simpleRoutes(auth, sync, simple)
             loginRoutes(sync, logins) { token -> setSessionCookie(token, config) }
             rateLimit(AUTH_LIMIT) {
                 // An unconnected phone asks to join (no session, no code); rate limited like sign-in.
@@ -623,5 +629,7 @@ class DeviceService(private val db: Db) {
         lastSeenAt = time("last_seen_at")?.toString(),
         revokedAt = time("revoked_at")?.toString(),
         vaultTrusted = time("vault_trusted_at") != null,
+        label = getString("label"),
+        expiresAt = time("expires_at")?.toString(),
     )
 }

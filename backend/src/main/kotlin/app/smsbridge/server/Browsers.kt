@@ -60,7 +60,7 @@ class BrowserDeviceService(private val db: Db, private val wake: Notices = Notic
     suspend fun requireTrusted(userId: UUID, deviceId: UUID) {
         val ok = db.tx {
             query(
-                "SELECT 1 FROM devices WHERE id = ? AND user_id = ? AND platform = 'web' AND vault_trusted_at IS NOT NULL AND revoked_at IS NULL",
+                "SELECT 1 FROM devices WHERE id = ? AND user_id = ? AND platform = 'web' AND vault_trusted_at IS NOT NULL AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())",
                 deviceId, userId,
             ) { 1 }.isNotEmpty()
         }
@@ -70,7 +70,7 @@ class BrowserDeviceService(private val db: Db, private val wake: Notices = Notic
     /** Vault keys wrapped for this browser; 404 once it is revoked or not this user's. */
     suspend fun keys(userId: UUID, deviceId: UUID): BrowserKeys = db.tx {
         val trusted = query(
-            "SELECT vault_trusted_at FROM devices WHERE id = ? AND user_id = ? AND platform = 'web' AND revoked_at IS NULL",
+            "SELECT vault_trusted_at FROM devices WHERE id = ? AND user_id = ? AND platform = 'web' AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())",
             deviceId, userId,
         ) { it.time("vault_trusted_at") != null }.singleOrNull()
             ?: throw ApiException(HttpStatusCode.NotFound, "unknown_browser", "This browser is not registered or was revoked.")

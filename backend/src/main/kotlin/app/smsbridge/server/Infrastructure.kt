@@ -154,6 +154,8 @@ object Secrets {
     fun token(): String = Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32).also(random::nextBytes))
 
     /** 10 Crockford base32 characters (50 bits), shown as XXXXX-XXXXX. Short-lived and single-use. */
+    fun digits(n: Int): String = (1..n).map { '0' + random.nextInt(10) }.joinToString("")
+
     fun pairingCode(): String = (1..10).map { CROCKFORD[random.nextInt(32)] }.joinToString("").let { "${it.take(5)}-${it.drop(5)}" }
 
     fun normalizePairingCode(input: String): String =

@@ -143,7 +143,7 @@ class LoginTest {
 
         val ghost = browser.postJson("/api/v1/auth/login-requests", """{"name":"X","encPublicKey":"${key()}","signPublicKey":"${key()}","username":"nobody"}""")
         assertEquals(HttpStatusCode.Created, ghost.status)
-        assertEquals(setOf("requestId", "secret", "expiresAt"), obj(ghost).keys)
+        assertEquals(setOf("requestId", "secret", "expiresAt", "code"), obj(ghost).keys)
         assertEquals(0, Json.parseToJsonElement(owner.get("/api/v1/vault/login-requests") { header(HttpHeaders.Authorization, "Bearer $phone") }.bodyAsText()).jsonArray.size)
     }
 
