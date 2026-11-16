@@ -3,7 +3,8 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Label } from "@/components/ui/input";
-import { PairQr } from "@/components/pair-qr";
+import { PhoneSignIn } from "@/components/phone-sign-in";
+import { api } from "@/lib/api";
 import { useSession } from "@/lib/session";
 
 
@@ -15,74 +16,35 @@ export function VaultGate({ children }: { children: ReactNode }) {
 }
 
 export function UnlockCard() {
-  const { vault, vaultError, openWithBrowser, requestConfirm } = useSession();
+  const { vault, vaultError, openWithBrowser } = useSession();
   const [useRecovery, setUseRecovery] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   if (useRecovery) return <RecoveryKeyCard onBack={() => setUseRecovery(false)} />;
 
-  if (vault.status === "approval" && vault.confirmRequested && !vault.noApprovedPhone) {
-    return (
-      <Card className="max-w-xl">
-        <CardHeader>
-          <CardTitle>Confirm on your phone</CardTitle>
-          <CardDescription>
-            {vault.confirmNumber == null
-              ? "Your phone got a notification. Open it (or SMS Bridge → Sync → Confirm with a number)."
-              : "On your phone, tap this number:"}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4 text-center">
-          {vault.confirmNumber == null ? (
-            <p className="py-6 text-sm text-muted-foreground">Waiting for your phone…</p>
-          ) : (
-            <p className="py-4 font-mono text-7xl font-semibold tracking-wider">{vault.confirmNumber}</p>
-          )}
-          <p className="text-xs text-muted-foreground">This page opens by itself once you tap it.</p>
-        </CardContent>
-      </Card>
-    );
-  }
-
   if (vault.status === "approval") {
-    const connectPhone = vault.noApprovedPhone;
+    const pending = vault.deviceId;
     return (
       <Card className="max-w-xl">
         <CardHeader>
-          <CardTitle>{connectPhone ? "Connect your phone" : "Scan with your phone"}</CardTitle>
+          <CardTitle>Allow this browser</CardTitle>
           <CardDescription>
-            {connectPhone
-              ? "Open SMS Bridge on your Android phone, go to Sync and tap Scan QR code."
-              : "Open SMS Bridge on your phone, go to Sync and tap Scan to approve a browser."}{" "}
-            This page opens by itself once it is done.
+            Open SMS Bridge on your phone and tap <strong>Scan QR code</strong>, or <strong>Type code</strong> and type the 8 digits.
+            This page opens by itself once you allow it.
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <PairQr withCode={connectPhone} deviceId={vault.deviceId} fingerprint={vault.fingerprint} />
-          {connectPhone && (
-            <p className="text-center text-xs text-muted-foreground">
-              No app yet? Install it from <a className="underline" href="/download/sms-bridge.apk">this link</a> on the phone.
-            </p>
-          )}
-          {vault.confirmDeclined && (
-            <Alert tone="warning">Not confirmed: a different number was tapped on the phone. Try again.</Alert>
-          )}
-          {!connectPhone && (
-            <Button variant="outline" className="w-full" onClick={() => void requestConfirm()}>
-              Can&apos;t scan? Confirm on your phone instead
-            </Button>
-          )}
-          <details className="text-sm">
-            <summary className="cursor-pointer text-muted-foreground">More options</summary>
-            <div className="mt-2 space-y-3">
-              <div>
-                <p className="text-muted-foreground">Compare codes: approve on a connected phone (Sync → Devices waiting for approval) only if it shows</p>
-                <p className="text-center font-mono text-2xl tracking-widest">{vault.safetyCode}</p>
-              </div>
-              <button className="text-primary underline-offset-4 hover:underline" onClick={() => setUseRecovery(true)}>
-                I have a recovery key
-              </button>
-            </div>
-          </details>
+        <CardContent className="space-y-3">
+          {error && <Alert tone="error">{error}</Alert>}
+          <PhoneSignIn
+            onApproved={() => {
+              // The browser entry that waited before is not needed any more.
+              void api.revoke(pending).catch(() => {}).finally(() => window.location.reload());
+            }}
+            onFailed={setError}
+          />
+          <p className="text-center text-xs text-muted-foreground">
+            No app yet? Install it from <a className="underline" href="/download/sms-bridge.apk">this link</a> on the phone.
+          </p>
         </CardContent>
       </Card>
     );

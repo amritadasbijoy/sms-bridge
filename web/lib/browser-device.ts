@@ -84,6 +84,12 @@ async function save(r: DeviceRecord) {
 }
 export const forgetLocal = (userId: string) => withStore("readwrite", (s) => s.delete(userId));
 
+/** Forgets [r] only if it is still the stored record (a newer approved one may have replaced it). */
+async function forgetIfCurrent(r: DeviceRecord) {
+  const stored = await withStore<{ deviceId: string } | undefined>("readonly", (s) => s.get(r.userId));
+  if (stored?.deviceId === r.deviceId) await forgetLocal(r.userId);
+}
+
 const toB64 = (b: ArrayBuffer | Bytes) => btoa(String.fromCharCode(...new Uint8Array(b)));
 
 async function signingPublicKey(): Promise<string> {
@@ -155,7 +161,7 @@ export async function fetchVaultKeys(r: DeviceRecord): Promise<DeviceKeysResult>
     res = await api.browserKeys(r.deviceId);
   } catch (e) {
     if (e instanceof ApiError && e.status === 404) {
-      await forgetLocal(r.userId);
+      await forgetIfCurrent(r);
       return { state: "revoked" };
     }
     throw e;

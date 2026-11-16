@@ -649,7 +649,8 @@ internal fun rememberQrScanner(onResult: (String) -> Unit): (String) -> Unit {
     }
     return { prompt ->
         launcher.launch(
-            ScanOptions().setDesiredBarcodeFormats(ScanOptions.QR_CODE).setPrompt(prompt).setBeepEnabled(false).setOrientationLocked(false),
+            ScanOptions().setDesiredBarcodeFormats(ScanOptions.QR_CODE).setPrompt(prompt).setBeepEnabled(false)
+                .setCaptureActivity(PortraitCaptureActivity::class.java).setOrientationLocked(true),
         )
     }
 }
