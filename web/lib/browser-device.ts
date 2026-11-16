@@ -10,7 +10,8 @@
  */
 import { api, ApiError } from "./api";
 import { base64ToBytes, safetyCode, type Bytes } from "./crypto";
-import { hpkeOpen, wrapContext } from "./hpke";
+import { hpkeOpen, hpkeSeal, wrapContext } from "./hpke";
+import { newSalt, PASSWORD_ITERATIONS, PASSWORD_RECIPIENT, passwordKey } from "./password";
 
 export interface DeviceRecord {
   userId: string;
@@ -185,4 +186,46 @@ export async function rawVaultKeys(r: DeviceRecord): Promise<Map<number, Bytes>>
     out.set(k.keyVersion, await hpkeOpen(r.encKeys.privateKey, pub, base64ToBytes(k.wrappedKey), wrapContext(r.deviceId, k.keyVersion)));
   }
   return out;
+}
+
+/**
+ * Signs this browser in with the account password alone: unwraps the vault key the password opens,
+ * registers this browser, wraps the key for it and approves itself (the server checks the
+ * password-derived verifier). Throws ApiError `no_password_vault` when the password does not open
+ * messages yet; the dashboard then asks a phone instead.
+ */
+export async function adoptWithPassword(userId: string, password: string): Promise<DeviceRecord> {
+  const vault = await api.passwordVault();
+  const pk = await passwordKey(password, vault.salt, vault.iterations);
+  const raw = new Map<number, Bytes>();
+  try {
+    for (const k of vault.keys) {
+      raw.set(k.keyVersion, await hpkeOpen(pk.privateKey, pk.publicKey, base64ToBytes(k.wrappedKey), wrapContext(PASSWORD_RECIPIENT, k.keyVersion)));
+    }
+    const { encKeys, encPublic, signPublic } = await generateKeys();
+    const { deviceId } = await api.registerBrowser(encPublic, signPublic);
+    const own = base64ToBytes(encPublic);
+    const keys = [];
+    for (const [v, key] of raw) keys.push({ keyVersion: v, wrappedKey: toB64(await hpkeSeal(own, key, wrapContext(deviceId, v))) });
+    await api.selfApprove(deviceId, pk.verifierB64, keys);
+    const record: DeviceRecord = { userId, deviceId, encKeys, encPublic, signPublic };
+    await save(record);
+    return record;
+  } finally {
+    raw.forEach((k) => k.fill(0));
+  }
+}
+
+/** After "Save your account": wraps this approved browser's vault keys for the password. */
+export async function savePasswordVault(r: DeviceRecord, password: string): Promise<void> {
+  const salt = newSalt();
+  const pk = await passwordKey(password, salt, PASSWORD_ITERATIONS);
+  const raw = await rawVaultKeys(r);
+  try {
+    const keys = [];
+    for (const [v, key] of raw) keys.push({ keyVersion: v, wrappedKey: toB64(await hpkeSeal(pk.publicKey, key, wrapContext(PASSWORD_RECIPIENT, v))) });
+    await api.setPasswordVault({ deviceId: r.deviceId, salt, iterations: PASSWORD_ITERATIONS, publicKey: pk.publicB64, verifier: pk.verifierB64, keys });
+  } finally {
+    raw.forEach((k) => k.fill(0));
+  }
 }

@@ -10,19 +10,14 @@ import { useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
 
 const NAV = [
-  { href: "/dashboard/", label: "Dashboard" },
-  { href: "/inbox/", label: "Inbox" },
-  { href: "/sent/", label: "Sent" },
-  { href: "/conversations/", label: "Conversations" },
-  { href: "/devices/", label: "Devices" },
-  { href: "/sync/", label: "Sync" },
-  { href: "/backups/", label: "Backups" },
+  { href: "/dashboard/", label: "Messages" },
+  { href: "/devices/", label: "Phones & browsers" },
   { href: "/settings/", label: "Settings" },
 ];
 
 /** Signed-in layout. Sends signed-out visitors to /login. [phoneTabs]: the page lists messages, so show the phone tabs. */
 export function Shell({ title, children, phoneTabs }: { title: string; children: ReactNode; phoneTabs?: boolean }) {
-  const { me, vault, lock, signOut } = useSession();
+  const { me, vault, signOut } = useSession();
   const router = useRouter();
 
   useEffect(() => {
@@ -44,11 +39,6 @@ export function Shell({ title, children, phoneTabs }: { title: string; children:
           </Link>
           <div className="flex items-center gap-2 text-sm">
             {vault.status === "ready" && <AddPhoneButton size="sm" className="hidden sm:inline-flex" />}
-            {vault.status === "ready" && (
-              <Button variant="outline" size="sm" onClick={lock} title="Forget the vault key in this tab">
-                Lock
-              </Button>
-            )}
             <Button variant="ghost" size="sm" onClick={() => void signOut().then(() => router.replace("/login/"))}>
               Sign out
             </Button>
