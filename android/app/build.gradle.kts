@@ -15,8 +15,8 @@ android {
         applicationId = "app.smsbridge"
         minSdk = 26
         targetSdk = 34
-        versionCode = 17
-        versionName = "0.9.1"
+        versionCode = 18
+        versionName = "0.10.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
         // Plain HTTP only to the emulator's view of the development machine (debug and releaseTest).

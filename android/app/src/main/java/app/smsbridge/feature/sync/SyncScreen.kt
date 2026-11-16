@@ -147,7 +147,8 @@ class SyncViewModel @Inject constructor(
     fun onScanned(text: String) = run {
         _info.value = null
         PairLinks.parseLogin(text)?.let { login ->
-            _info.value = "Done. ${cloud.approveScannedLogin(login)} now shows your messages."
+            // Ask first: what to share and for how long, then approve (allow()).
+            _consent.value = Consent(login, cloud.prepareLogin(login).name)
             _wasRevoked.value = false
             return@run
         }
@@ -156,6 +157,75 @@ class SyncViewModel @Inject constructor(
         _wasRevoked.value = false
         _recoveryReminder.value = cloud.recoveryReminder()
         if (link.linkSecret != null && cloud.state.value is CloudState.WaitingForApproval) waitForBrowserApproval()
+    }
+
+    // ---- Simple mode: consent, typed code, names, who can see my SMS ----
+
+    /** A browser waiting for the user's OK, with what to share. */
+    data class Consent(val link: app.smsbridge.data.cloud.LoginLink, val browserName: String)
+
+    private val _consent = MutableStateFlow<Consent?>(null)
+    val consent: StateFlow<Consent?> = _consent.asStateFlow()
+    private val _shareDays = MutableStateFlow<Int?>(7)
+    val shareDays: StateFlow<Int?> = _shareDays.asStateFlow()
+    private val _linked = MutableStateFlow<List<app.smsbridge.data.cloud.LinkedDeviceDto>>(emptyList())
+    val linked: StateFlow<List<app.smsbridge.data.cloud.LinkedDeviceDto>> = _linked.asStateFlow()
+    private val _phoneName = MutableStateFlow("")
+    val phoneName: StateFlow<String> = _phoneName.asStateFlow()
+    /** Non-null: ask "Name this phone", prefilled with this. */
+    private val _askName = MutableStateFlow<String?>(null)
+    val askName: StateFlow<String?> = _askName.asStateFlow()
+
+    /** The 8 digits under the browser's QR code. */
+    fun submitCode(code: String) = run {
+        _info.value = null
+        val link = cloud.linkFromCode(code)
+        _consent.value = Consent(link, cloud.prepareLogin(link).name)
+    }
+
+    /** The user allowed the browser: share [days] (null: everything), unlink after [unlinkDays] (null: never). */
+    fun allow(days: Int?, unlinkDays: Int?) = run {
+        val c = _consent.value ?: return@run
+        _consent.value = null
+        cloud.setShareDays(days)
+        _shareDays.value = cloud.shareDays()
+        val name = cloud.approveScannedLogin(c.link, unlinkDays)
+        _info.value = "Done. $name now shows your SMS."
+        loadLinkedNow()
+        if (cloud.needsName()) _askName.value = cloud.phoneName()
+    }
+
+    fun decline() { _consent.value = null }
+
+    fun loadLinked() = viewModelScope.launch { runCatching { loadLinkedNow() } }
+
+    private suspend fun loadLinkedNow() {
+        _phoneName.value = cloud.phoneName()
+        _shareDays.value = cloud.shareDays()
+        _linked.value = cloud.linked()
+    }
+
+    fun stopSharing(id: String) = run {
+        cloud.stopSharing(id)
+        _info.value = "Stopped. That browser can no longer see your SMS."
+        loadLinkedNow()
+    }
+
+    fun changeShareDays(days: Int?) = run {
+        cloud.setShareDays(days)
+        _shareDays.value = cloud.shareDays()
+    }
+
+    fun nameThisPhone(name: String?) = run {
+        _askName.value = null
+        cloud.setPhoneName(name)
+        loadLinkedNow()
+    }
+
+    fun renamePhone() = viewModelScope.launch { _askName.value = cloud.phoneName() }
+    fun skipName() = run {
+        _askName.value = null
+        cloud.setPhoneName(null)
     }
 
     /** True while an "Add another phone" scan waits for the browser to approve this phone. */
@@ -508,7 +578,7 @@ private fun ConfirmNumberDialog(viewModel: SyncViewModel) {
 
 /** Notifications and battery settings the background connection needs. Hidden once both are fine. */
 @Composable
-private fun StayReachableCard() {
+internal fun StayReachableCard() {
     val context = LocalContext.current
     var refresh by remember { mutableStateOf(0) }
     val lifecycle = androidx.compose.ui.platform.LocalLifecycleOwner.current
@@ -549,7 +619,7 @@ private fun StayReachableCard() {
 
 /** Opens the QR scanner; the scanned text goes to [onResult]. */
 @Composable
-private fun rememberQrScanner(onResult: (String) -> Unit): (String) -> Unit {
+internal fun rememberQrScanner(onResult: (String) -> Unit): (String) -> Unit {
     val launcher = androidx.activity.compose.rememberLauncherForActivityResult(ScanContract()) { result ->
         result.contents?.let(onResult)
     }

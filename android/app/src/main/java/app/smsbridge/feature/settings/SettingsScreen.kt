@@ -91,7 +91,7 @@ class SettingsViewModel @Inject constructor(
 }
 
 @Composable
-fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
+fun SettingsScreen(onOpen: (String) -> Unit = {}, viewModel: SettingsViewModel = hiltViewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var confirmRescan by rememberSaveable { mutableStateOf(false) }
@@ -199,10 +199,24 @@ fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
                 Text(
                     "Messages are stored only in SMS Bridge's private storage on this phone and are " +
                         "excluded from Android cloud backup. App logs never contain message text or " +
-                        "phone numbers. Cloud sync, when it arrives, will be end-to-end encrypted and optional.",
+                        "phone numbers. What you share with a computer is end-to-end encrypted: the server cannot read it.",
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(top = 4.dp),
                 )
+            }
+        }
+
+        item {
+            SectionCard("Advanced") {
+                Text("Extra tools most people never need.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 2.dp))
+                listOf(
+                    "Messages on this phone" to app.smsbridge.ui.Routes.MESSAGES,
+                    "Backup & restore" to app.smsbridge.ui.Routes.BACKUP,
+                    "Phone-to-phone transfer" to app.smsbridge.ui.Routes.TRANSFER,
+                    "Connection details" to app.smsbridge.ui.Routes.SYNC,
+                ).forEach { (label, route) ->
+                    androidx.compose.material3.OutlinedButton(onClick = { onOpen(route) }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text(label) }
+                }
             }
         }
     }
