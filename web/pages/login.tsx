@@ -8,7 +8,7 @@ import { Input, Label } from "@/components/ui/input";
 import { api, ApiError } from "@/lib/api";
 import { PhoneSignIn } from "@/components/phone-sign-in";
 import { adoptWithPassword } from "@/lib/browser-device";
-import { loginSecret } from "@/lib/password";
+import { passwordSignIn } from "@/lib/account";
 import { useSession } from "@/lib/session";
 
 /**
@@ -30,18 +30,7 @@ function PasswordForm({ onBack }: { onBack: () => void }) {
     if (needCode) codeRef.current?.focus();
   }, [needCode]);
 
-  async function signIn(totp?: string) {
-    const secret = await loginSecret(username, password);
-    try {
-      return await api.login(username, secret, totp);
-    } catch (err) {
-      if (!(err instanceof ApiError) || err.code !== "invalid_credentials") throw err;
-      // An older account that still has the plain password: sign in once, then switch it over.
-      const me = await api.login(username, password, totp);
-      await api.setPassword(secret, password).catch(() => {});
-      return me;
-    }
-  }
+  const signIn = (totp?: string) => passwordSignIn(username, password, totp);
 
   async function submit(e: FormEvent) {
     e.preventDefault();

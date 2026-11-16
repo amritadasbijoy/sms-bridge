@@ -56,7 +56,7 @@ class SimpleTest {
 
     @BeforeEach
     fun clean() = runBlocking<Unit> {
-        db.tx { update("TRUNCATE users, user_sessions, devices, pairing_codes, device_tokens, revoked_devices, sync_events, vaults, vault_keys, invites, connect_requests, login_requests, audit_events, account_settings, password_vault CASCADE") }
+        db.tx { update("TRUNCATE users, user_sessions, devices, pairing_codes, device_tokens, revoked_devices, sync_events, vaults, vault_keys, invites, connect_requests, login_requests, audit_events, account_settings, password_vault, account_moves CASCADE") }
     }
 
     private fun bytes(n: Int) = b64.encodeToString(ByteArray(n).also(SecureRandom()::nextBytes))
@@ -248,5 +248,50 @@ class SimpleTest {
         db.tx { update("INSERT INTO devices (id, user_id, name, platform, created_at) VALUES (?, ?, 'Old', 'web', now() - interval '2 days')", UUID.randomUUID(), user) }
         SimpleService(db, Notices()).cleanup()
         assertEquals(0L, db.tx { query("SELECT count(*) FROM devices WHERE name = 'Old' AND revoked_at IS NULL") { it.getLong(1) }.single() })
+    }
+
+    @Test
+    fun aScannedPhoneMovesIntoTheAccountTheUserSignsInTo() = api {
+        // The old account: a phone, a browser, and a saved password.
+        val oldPhoneClient = createClient { }
+        val oldPhone = oldPhoneClient.newPhone()
+        val oldBrowser = createClient { install(HttpCookies) }
+        val r1 = obj(oldBrowser.postJson("/api/v1/auth/login-requests", """{"name":"Chrome","encPublicKey":"${key()}","signPublicKey":"${key()}"}"""))
+        oldPhoneClient.postJson("/api/v1/vault/login-requests/${r1["requestId"]!!.jsonPrimitive.content}/approve", oneKey, bearer = oldPhone)
+        oldBrowser.get("/api/v1/auth/login-requests/${r1["requestId"]!!.jsonPrimitive.content}") { header(REQUEST_SECRET_HEADER, r1["secret"]!!.jsonPrimitive.content) }
+        val loginSecret = bytes(32)
+        oldBrowser.postJson("/api/v1/auth/account", """{"username":"amrita","password":"$loginSecret"}""")
+
+        // A new phone scans: its own temporary account, signed into this browser.
+        val phoneClient = createClient { }
+        val phone = phoneClient.newPhone()
+        val browser = createClient { install(HttpCookies) }
+        val r2 = obj(browser.postJson("/api/v1/auth/login-requests", """{"name":"Firefox","encPublicKey":"${key()}","signPublicKey":"${key()}"}"""))
+        phoneClient.postJson("/api/v1/vault/login-requests/${r2["requestId"]!!.jsonPrimitive.content}/approve", oneKey, bearer = phone)
+        val tempBrowser = obj(browser.get("/api/v1/auth/login-requests/${r2["requestId"]!!.jsonPrimitive.content}") { header(REQUEST_SECRET_HEADER, r2["secret"]!!.jsonPrimitive.content) })["deviceId"]!!.jsonPrimitive.content
+        val tempUser = db.tx { query("SELECT user_id FROM devices WHERE id = ?", UUID.fromString(tempBrowser)) { it.uuid("user_id") }.single() }
+
+        // "I already have an account": start in the temporary account, sign in to the old one, target it.
+        assertEquals(HttpStatusCode.NotFound, phoneClient.get("/api/v1/vault/move") { header(HttpHeaders.Authorization, "Bearer $phone") }.status)
+        val token = obj(browser.postJson("/api/v1/account/move/start", """{"deviceId":"$tempBrowser"}"""))["token"]!!.jsonPrimitive.content
+        assertEquals(HttpStatusCode.OK, browser.postJson("/api/v1/auth/login", """{"username":"amrita","password":"$loginSecret"}""").status)
+        val secret = bytes(16)
+        assertEquals(HttpStatusCode.NoContent, browser.postJson("/api/v1/account/move/target", """{"token":"$token","linkSecret":"$secret"}""").status)
+        assertEquals(HttpStatusCode.NotFound, browser.postJson("/api/v1/account/move/target", """{"token":"$token","linkSecret":"$secret"}""").status) // once
+
+        // The phone picks it up, leaves, and joins the old account with the code.
+        val offer = obj(phoneClient.get("/api/v1/vault/move") { header(HttpHeaders.Authorization, "Bearer $phone") })
+        assertEquals(secret, offer["linkSecret"]!!.jsonPrimitive.content)
+        assertEquals(HttpStatusCode.NoContent, phoneClient.postJson("/api/v1/vault/move/accept", "{}", bearer = phone).status)
+        assertEquals(0L, db.tx { query("SELECT count(*) FROM users WHERE id = ?", tempUser) { it.getLong(1) }.single() }) // temporary account gone
+        val joined = phoneClient.postJson("/api/v1/devices/register", """{"pairingCode":"${offer["pairingCode"]!!.jsonPrimitive.content}","deviceId":"${UUID.randomUUID()}","name":"Galaxy","platform":"android","encPublicKey":"${key()}","signPublicKey":"${key()}"}""")
+        assertEquals(HttpStatusCode.Created, joined.status)
+        val amrita = db.tx { query("SELECT id FROM users WHERE username = 'amrita'") { it.uuid("id") }.single() }
+        val joinedId = UUID.fromString(obj(joined)["deviceId"]!!.jsonPrimitive.content)
+        assertEquals(amrita, db.tx { query("SELECT user_id FROM devices WHERE id = ?", joinedId) { it.uuid("user_id") }.single() })
+
+        // A real account (with a password) cannot be emptied this way.
+        val oldBrowserId = db.tx { query("SELECT id FROM devices WHERE user_id = ? AND platform = 'web' AND vault_trusted_at IS NOT NULL LIMIT 1", amrita) { it.uuid("id") }.single() }
+        assertEquals(HttpStatusCode.Conflict, oldBrowser.postJson("/api/v1/account/move/start", """{"deviceId":"$oldBrowserId"}""").status)
     }
 }

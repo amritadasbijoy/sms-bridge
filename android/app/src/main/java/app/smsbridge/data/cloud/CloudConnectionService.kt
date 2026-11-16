@@ -78,6 +78,15 @@ class CloudConnectionService : Service() {
                     updates.check(force = true)?.let { notifyUpdate(it) }
                     notifiedVersion = appVersion
                 }
+                // Moved into the user's other account from the website: wait for its browser to approve us.
+                if (cloud.checkMove()) {
+                    for (i in 1..90) {
+                        delay(2_000)
+                        if (runCatching { cloud.checkApproval() }.getOrNull() is CloudState.Ready) break
+                    }
+                    counter = -1L
+                    continue
+                }
                 val asking = cloud.pendingApprovals().filter { it.confirmRequested } + cloud.loginAsks()
                 asking.filter { it.deviceId !in notified }.forEach { notifyConfirm(it); notified += it.deviceId }
                 (notified - asking.map { it.deviceId }.toSet()).forEach { NotificationManagerCompat.from(this).cancel(it.hashCode()) }

@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input, Label } from "@/components/ui/input";
 import { api, ApiError } from "@/lib/api";
 import { ensureDevice, savePasswordVault } from "@/lib/browser-device";
+import { moveIntoAccount } from "@/lib/account";
 import { loginSecret, MIN_PASSWORD } from "@/lib/password";
 import { useSession } from "@/lib/session";
 
@@ -19,6 +20,8 @@ export function SaveAccountCard({ dismissible = true }: { dismissible?: boolean 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [show, setShow] = useState(false);
+  /** "I already have an account": sign in to it and move this phone there. */
+  const [existing, setExisting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hidden, setHidden] = useState(() => {
@@ -34,6 +37,24 @@ export function SaveAccountCard({ dismissible = true }: { dismissible?: boolean 
     e.preventDefault();
     if (!me) return;
     setError(null);
+    if (existing) {
+      setBusy(true);
+      try {
+        await moveIntoAccount(me.userId, username.trim(), password);
+        setPassword("");
+        window.location.reload(); // open the other account; MoveWatcher finishes the move there
+      } catch (err) {
+        setError(
+          err instanceof ApiError && err.code === "invalid_credentials"
+            ? "Wrong username or password."
+            : err instanceof ApiError
+              ? err.message
+              : "Could not sign in. Check your connection and try again.",
+        );
+        setBusy(false);
+      }
+      return;
+    }
     if (password.length < MIN_PASSWORD) return setError(`Use at least ${MIN_PASSWORD} characters.`);
     setBusy(true);
     try {
@@ -52,8 +73,25 @@ export function SaveAccountCard({ dismissible = true }: { dismissible?: boolean 
   return (
     <Card className="mb-4">
       <CardHeader className="pb-3">
-        <CardTitle className="text-base">Save your account</CardTitle>
-        <CardDescription>Choose a username and password to see these messages from any browser, without scanning again.</CardDescription>
+        <CardTitle className="text-base">{existing ? "Sign in to your account" : "Save your account"}</CardTitle>
+        <CardDescription>
+          {existing
+            ? "This phone moves into your account by itself, and you see all your phones there."
+            : "Choose a username and password to see these messages from any browser, without scanning again."}
+        </CardDescription>
+        <div className="flex gap-1 pt-2 text-sm" role="group" aria-label="Account">
+          {[false, true].map((v) => (
+            <button
+              key={String(v)}
+              type="button"
+              onClick={() => { setExisting(v); setError(null); }}
+              aria-pressed={existing === v}
+              className={existing === v ? "rounded-full border border-primary bg-primary/10 px-3 py-1 font-medium text-primary" : "rounded-full border px-3 py-1 hover:bg-accent"}
+            >
+              {v ? "I already have an account" : "I'm new"}
+            </button>
+          ))}
+        </div>
       </CardHeader>
       <CardContent>
         <form onSubmit={submit} className="grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
@@ -64,12 +102,12 @@ export function SaveAccountCard({ dismissible = true }: { dismissible?: boolean 
           <div className="space-y-1">
             <Label htmlFor="save-password">Password</Label>
             <div className="flex gap-1">
-              <Input id="save-password" type={show ? "text" : "password"} autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+              <Input id="save-password" type={show ? "text" : "password"} autoComplete={existing ? "current-password" : "new-password"} value={password} onChange={(e) => setPassword(e.target.value)} required />
               <Button type="button" variant="ghost" size="sm" onClick={() => setShow((s) => !s)}>{show ? "Hide" : "Show"}</Button>
             </div>
           </div>
           <div className="flex gap-2">
-            <Button type="submit" disabled={busy}>{busy ? "Saving…" : "Save"}</Button>
+            <Button type="submit" disabled={busy}>{busy ? (existing ? "Signing in…" : "Saving…") : existing ? "Sign in" : "Save"}</Button>
             {dismissible && <Button
               type="button"
               variant="ghost"
@@ -87,7 +125,8 @@ export function SaveAccountCard({ dismissible = true }: { dismissible?: boolean 
           </div>
         </form>
         <p className="mt-2 text-xs text-muted-foreground">
-          At least {MIN_PASSWORD} characters. Your password opens your messages, so keep it safe: it is never sent to the server.
+          {existing ? "Your password opens your messages; it is never sent to the server." : <>At least {MIN_PASSWORD} characters.</>}{" "}
+          {!existing && "Your password opens your messages, so keep it safe: it is never sent to the server."}
         </p>
         {error && <Alert tone="error" className="mt-2">{error}</Alert>}
       </CardContent>

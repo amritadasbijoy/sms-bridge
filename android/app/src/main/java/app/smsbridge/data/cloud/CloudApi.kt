@@ -157,6 +157,17 @@ class CloudApi(baseUrl: String, private val token: String? = null) {
         }
     }
 
+    /** A move into the user's other account, started from this account's browser; null if none. */
+    fun moveOffer(): Pair<String, ByteArray>? = try {
+        call("GET", "/api/v1/vault/move").let { it.getString("pairingCode") to unb64(it.getString("linkSecret")) }
+    } catch (e: CloudHttpException) {
+        if (e.status == 404) null else throw e
+    }
+
+    fun moveAccept() {
+        call("POST", "/api/v1/vault/move/accept", JSONObject())
+    }
+
     /** This phone leaves its account; the server deletes its messages. */
     fun leave() {
         call("POST", "/api/v1/vault/leave", JSONObject())

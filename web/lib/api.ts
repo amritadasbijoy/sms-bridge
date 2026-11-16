@@ -108,6 +108,9 @@ export const api = {
     request<void>("POST", "/auth/password", { password, ...(currentPassword ? { currentPassword } : {}) }),
   registerWithInvite: (username: string, password: string, invite: string) =>
     request<Me>("POST", "/auth/register", { username, password, invite }),
+  /** Moving a scanned phone from this temporary account into the user's own one (lib/account.ts). */
+  moveStart: (deviceId: string) => request<{ token: string }>("POST", "/account/move/start", { deviceId }),
+  moveTarget: (token: string, linkSecret: string) => request<void>("POST", "/account/move/target", { token, linkSecret }),
   setLabel: (deviceId: string, label: string | null) => request<void>("PUT", `/devices/${encodeURIComponent(deviceId)}/label`, { label }),
   /** "Save your account": [password] is the browser-derived login secret (lib/password.ts). */
   saveAccount: (username: string, password: string) => request<void>("POST", "/auth/account", { username, password }),

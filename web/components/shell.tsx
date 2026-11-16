@@ -4,6 +4,7 @@ import { useRouter } from "next/router";
 import { useEffect, type ReactNode } from "react";
 import { AddPhoneButton } from "@/components/add-phone";
 import { ConnectRequests } from "@/components/connect-requests";
+import { MoveWatcher } from "@/components/move-watcher";
 import { NewMessageToast, PhoneTabs } from "@/components/phone-tabs";
 import { Button } from "@/components/ui/button";
 import { useSession } from "@/lib/session";
@@ -68,6 +69,7 @@ export function Shell({ title, children, phoneTabs }: { title: string; children:
       <NewMessageToast />
       <main className="mx-auto max-w-6xl px-4 py-6">
         <h1 className="mb-5 text-xl font-semibold">{title}</h1>
+        <MoveWatcher />
         {phoneTabs && vault.status === "ready" && <PhoneTabs />}
         {children}
       </main>

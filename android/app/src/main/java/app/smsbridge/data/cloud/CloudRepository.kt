@@ -291,6 +291,22 @@ class CloudRepository @Inject constructor(
 
     suspend fun stopSharing(deviceId: String) = io { api().revokeLinked(deviceId) }
 
+    /**
+     * "I already have an account" on the website: this phone's temporary account asked it to move.
+     * Leaves (the temporary account and its server copies go), joins the other account with the
+     * code and proves it to the browser, which approves it. Returns true if it moved.
+     */
+    suspend fun checkMove(): Boolean = io {
+        if (refresh() !is CloudState.Ready) return@io false
+        val (code, secret) = api().moveOffer() ?: return@io false
+        val server = settings.getString(K_SERVER)!!
+        api().moveAccept()
+        disconnect()
+        handleLink(PairLink(server, code, null, null, secret))
+        AppLog.i(TAG, "moved to another account")
+        true
+    }
+
     /** This phone's id on the server, to tell it apart in the account's list. */
     suspend fun myDeviceId(): String = cloudDeviceId()
 
@@ -617,6 +633,7 @@ class CloudRepository @Inject constructor(
 
     private suspend fun becomeTrusted(): CloudState {
         settings.putString(K_TRUSTED, "true")
+        settings.getString(K_PHONE_NAME)?.let { name -> runCatching { api().setLabel(name) } }
         if (settings.getString(K_SNAPSHOT_DONE) == null) {
             // The chosen range only (last 7 days by default); the server keeps the same range.
             val since = shareDays()?.let { time.nowMillis() - it * DAY_MS } ?: 0L
