@@ -17,6 +17,9 @@ data class PendingDeviceDto(val id: String, val name: String, val encPublic: Byt
 data class StoredEventDto(val eventId: String, val deviceId: String, val deviceSequence: Long, val serverSequence: Long, val keyVersion: Int, val ciphertext: ByteArray)
 data class LoginAskDto(val id: String, val deviceId: String, val name: String, val encPublic: ByteArray, val signPublic: ByteArray)
 data class ConnectRequestDto(val requestId: String, val secret: String, val number: Int, val expiresAt: String)
+data class CodeLookupDto(val requestId: String, val name: String, val encPublic: ByteArray, val signPublic: ByteArray)
+/** A phone or browser of this account, for "Who can see my SMS". */
+data class LinkedDeviceDto(val id: String, val name: String, val label: String?, val platform: String, val trusted: Boolean, val lastSeenAt: String?, val expiresAt: String?)
 data class UploadEventDto(val eventId: String, val deviceSequence: Long, val keyVersion: Int, val ciphertext: ByteArray, val signature: ByteArray)
 
 /**
@@ -122,9 +125,39 @@ class CloudApi(baseUrl: String, private val token: String? = null) {
         call("POST", "/api/v1/vault/login-requests/$id/decline", JSONObject())
     }
 
-    fun loginApprove(id: String, keys: List<WrappedKeyDto>) {
-        call("POST", "/api/v1/vault/login-requests/$id/approve", JSONObject().put("keys", keys(keys)))
+    fun loginApprove(id: String, keys: List<WrappedKeyDto>, expiresInDays: Int? = null) {
+        call("POST", "/api/v1/vault/login-requests/$id/approve", JSONObject().put("keys", keys(keys)).put("expiresInDays", expiresInDays ?: JSONObject.NULL))
     }
+
+    /** The browser's 8-digit code, typed instead of scanning (no account needed yet). */
+    fun lookupCode(code: String): CodeLookupDto = call("GET", "/api/v1/auth/login-codes/${code.filter(Char::isDigit)}").let {
+        CodeLookupDto(it.getString("requestId"), it.getString("name"), unb64(it.getString("encPublicKey")), unb64(it.getString("signPublicKey")))
+    }
+
+    fun setLabel(label: String?) {
+        call("PUT", "/api/v1/vault/label", JSONObject().put("label", label ?: JSONObject.NULL))
+    }
+
+    fun linked(): List<LinkedDeviceDto> = callArray("GET", "/api/v1/vault/linked").let { a ->
+        List(a.length()) { i ->
+            val o = a.getJSONObject(i)
+            LinkedDeviceDto(
+                o.getString("id"), o.getString("name"), o.optStringOrNull("label"), o.getString("platform"), o.optBoolean("trusted"),
+                o.optStringOrNull("lastSeenAt"), o.optStringOrNull("expiresAt"),
+            )
+        }
+    }
+
+    fun revokeLinked(id: String) {
+        call("POST", "/api/v1/vault/linked/$id/revoke", JSONObject())
+    }
+
+    /** How long the server keeps messages (null: forever). */
+    fun setRetention(days: Int?) {
+        call("PUT", "/api/v1/vault/retention", JSONObject().put("days", days ?: JSONObject.NULL))
+    }
+
+    private fun JSONObject.optStringOrNull(key: String): String? = if (isNull(key)) null else optString(key).ifEmpty { null }
 
     /** Number matching: the random challenge the browser turns into its number. */
     fun setChallenge(deviceId: String, salt: ByteArray) {

@@ -1,6 +1,7 @@
 package app.smsbridge.data.cloud
 
 import androidx.room.withTransaction
+import app.smsbridge.BuildConfig
 import app.smsbridge.core.common.AppLog
 import app.smsbridge.core.common.TimeSource
 import app.smsbridge.core.database.SmsBridgeDatabase
@@ -233,7 +234,17 @@ class CloudRepository @Inject constructor(
     // ---- Signing browsers in ----------------------------------------------------------------
 
     /** A scanned sign-in QR code: checks the browser's keys against the scanned fingerprint and signs it in. */
-    suspend fun approveScannedLogin(link: LoginLink): String = io {
+    suspend fun approveScannedLogin(link: LoginLink, expiresInDays: Int? = null): String = io {
+        val ask = prepareLogin(link)
+        approveLogin(link.requestId, ask.toApproval(), expiresInDays)
+        ask.name
+    }
+
+    /**
+     * Before asking the user: makes sure this phone can approve (its own account if it has none yet)
+     * and that the browser's keys match the scanned fingerprint. Returns the browser's request.
+     */
+    suspend fun prepareLogin(link: LoginLink): LoginAskDto = io {
         if (refresh() is CloudState.NotConnected) startOwnAccount(link.server)
         if (refresh() !is CloudState.Ready) throw IllegalArgumentException("This phone is still waiting for approval. Finish that first, then scan the code again.")
         val ask = api().loginRequest(link.requestId)
@@ -241,8 +252,60 @@ class CloudRepository @Inject constructor(
             AppLog.w(TAG, "sign-in fingerprint does not match the server's keys; not approving")
             throw IllegalArgumentException("Security check failed: this browser's keys do not match the QR code. It was not signed in.")
         }
-        approveLogin(link.requestId, ask.toApproval())
-        ask.name
+        ask
+    }
+
+    /**
+     * The 8 digits shown under the browser's QR code. Without a camera there is no fingerprint to
+     * compare, so this trusts the server to report the browser's keys (the QR code does not).
+     */
+    suspend fun linkFromCode(code: String): LoginLink = io {
+        val server = CloudApi.normalize(settings.getString(K_SERVER) ?: settings.getString(K_LAST_SERVER) ?: "https://${BuildConfig.DEFAULT_SITE}")
+        val found = try {
+            CloudApi(server).lookupCode(code)
+        } catch (e: CloudHttpException) {
+            throw IllegalArgumentException(e.message)
+        }
+        LoginLink(server, found.requestId, PairLinks.fingerprint(found.encPublic, found.signPublic))
+    }
+
+    // ---- Who can see my SMS, names and range ---------------------------------------------------
+
+    suspend fun linked(): List<LinkedDeviceDto> = io { if (refresh() is CloudState.Ready) api().linked() else emptyList() }
+
+    suspend fun stopSharing(deviceId: String) = io { api().revokeLinked(deviceId) }
+
+    suspend fun phoneName(): String = settings.getString(K_PHONE_NAME) ?: devices.localDevice.first()?.name ?: "This phone"
+
+    /** True until the user named this phone (asked once after the first link). */
+    suspend fun needsName(): Boolean = settings.getString(K_PHONE_NAME) == null && refresh() is CloudState.Ready
+
+    suspend fun setPhoneName(name: String?) = io {
+        val clean = name?.trim()?.take(40)?.ifEmpty { null }
+        api().setLabel(clean)
+        settings.putString(K_PHONE_NAME, clean ?: (devices.localDevice.first()?.name ?: "This phone"))
+    }
+
+    /** Days of messages shared with the server (null: everything). */
+    suspend fun shareDays(): Int? = when (val v = settings.getString(K_SHARE_DAYS)) {
+        null -> DEFAULT_SHARE_DAYS
+        "all" -> null
+        else -> v.toIntOrNull() ?: DEFAULT_SHARE_DAYS
+    }
+
+    /** Sets how much is shared: the server keeps that range, and older messages inside it are uploaded now. */
+    suspend fun setShareDays(days: Int?) = io {
+        settings.putString(K_SHARE_DAYS, days?.toString() ?: "all")
+        if (refresh() !is CloudState.Ready) return@io
+        api().setRetention(days)
+        val from = settings.getString(K_HISTORY_FROM)?.toLongOrNull() ?: return@io
+        val wanted = days?.let { time.nowMillis() - it * DAY_MS } ?: Long.MIN_VALUE
+        if (wanted < from) {
+            val queued = enqueueRange(wanted, from)
+            settings.putString(K_HISTORY_FROM, wanted.coerceAtLeast(0).toString())
+            AppLog.i(TAG, "queued $queued older messages for the new range")
+            scheduler.scheduleSync()
+        }
     }
 
     /** Browsers that typed this account's username and wait for a number confirmation. */
@@ -260,10 +323,10 @@ class CloudRepository @Inject constructor(
     }
 
     /** Wraps every vault key version for the browser's new device id and approves the sign-in. */
-    private suspend fun approveLogin(loginId: String, request: PendingApproval) {
+    private suspend fun approveLogin(loginId: String, request: PendingApproval, expiresInDays: Int? = null) {
         val current = settings.getString(K_VK_CURRENT)?.toIntOrNull() ?: throw IllegalStateException("no vault key")
         val wrapped = (1..current).map { v -> WrappedKeyDto(v, CloudCrypto.wrapForDevice(secret(vkKey(v))!!, request.encPublic, request.deviceId, v)) }
-        api().loginApprove(loginId, wrapped)
+        api().loginApprove(loginId, wrapped, expiresInDays)
         AppLog.i(TAG, "signed a browser in")
     }
 
@@ -527,8 +590,9 @@ class CloudRepository @Inject constructor(
     private suspend fun becomeTrusted(): CloudState {
         settings.putString(K_TRUSTED, "true")
         if (settings.getString(K_SNAPSHOT_DONE) == null) {
-            // Recent messages only by default; older history is uploaded on request (uploadFullHistory).
-            val since = time.nowMillis() - INITIAL_SYNC_WINDOW_MS
+            // The chosen range only (last 7 days by default); the server keeps the same range.
+            val since = shareDays()?.let { time.nowMillis() - it * DAY_MS } ?: 0L
+            runCatching { api().setRetention(shareDays()) }
             settings.putString(K_HISTORY_FROM, since.toString())
             val queued = enqueueSnapshot(since, before = false)
             settings.putString(K_SNAPSHOT_DONE, "true")
@@ -561,11 +625,12 @@ class CloudRepository @Inject constructor(
      * Queues one SMS_IMPORTED event per archived message dated from [since] (or, with [before],
      * older than it), newest first: the queue uploads in this order, so recent messages arrive first.
      */
-    private suspend fun enqueueSnapshot(since: Long, before: Boolean): Int {
+    private suspend fun enqueueSnapshot(since: Long, before: Boolean): Int =
+        if (before) enqueueRange(Long.MIN_VALUE, since) else enqueueRange(since, Long.MAX_VALUE)
+
+    private suspend fun enqueueRange(from: Long, until: Long): Int {
         val dao = db.smsMessageDao()
         val max = dao.maxRowId() ?: return 0
-        val from = if (before) Long.MIN_VALUE else since
-        val until = if (before) since else Long.MAX_VALUE
         var cursorDate = Long.MAX_VALUE
         var cursorRow = Long.MAX_VALUE
         var total = 0
@@ -635,8 +700,11 @@ class CloudRepository @Inject constructor(
         const val K_RECOVERY_REMINDER = "cloud.recovery_reminder"
         const val K_FULL_HISTORY = "cloud.full_history"
 
-        /** The first upload covers the latest day; the rest of the archive only on request. */
-        const val INITIAL_SYNC_WINDOW_MS = 24L * 60 * 60 * 1000
+        const val DAY_MS = 24L * 60 * 60 * 1000
+        const val DEFAULT_SHARE_DAYS = 7
+        // Survive a disconnect: the user's choices for this phone.
+        const val K_SHARE_DAYS = "cloudnotice.share_days"
+        const val K_PHONE_NAME = "cloudnotice.phone_name"
         // Outside PREFIX on purpose: they survive a disconnect.
         const val K_REVOKED_NOTICE = "cloudnotice.revoked"
         const val K_LAST_SERVER = "cloudnotice.last_server"
@@ -652,6 +720,7 @@ class CloudRepository @Inject constructor(
 class HttpSyncTransport @Inject constructor(
     private val cloud: CloudRepository,
     private val db: SmsBridgeDatabase,
+    private val sims: app.smsbridge.data.sms.SimInfo,
 ) : SyncTransport {
 
     override suspend fun isConfigured(): Boolean = cloud.isReady()
@@ -701,6 +770,7 @@ class HttpSyncTransport @Inject constructor(
                 .put("status", m.status ?: JSONObject.NULL)
                 .put("sub", m.subscriptionId ?: JSONObject.NULL)
                 .put("src", m.sourceDeviceId ?: JSONObject.NULL)
+            sims.of(m.subscriptionId)?.let { o.put("slot", it.slot).put("carrier", it.carrier ?: JSONObject.NULL) }
         }
         return o.toString()
     }

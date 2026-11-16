@@ -42,6 +42,9 @@ export interface LoginStatus { status: string; challenge?: string | null; device
 export interface Device {
   id: string; name: string; platform: string; createdAt: string;
   lastSeenAt: string | null; revokedAt: string | null; vaultTrusted: boolean;
+  /** Name chosen by the user ("Office phone"); [name] is the model. */
+  label?: string | null;
+  expiresAt?: string | null;
 }
 export interface WrappedKey { keyVersion: number; wrappedKey: string }
 export interface PendingDevice {
@@ -93,7 +96,7 @@ export const api = {
   start: (invite?: string) => request<Me>("POST", "/auth/start", invite ? { invite } : {}),
   /** Asks to be signed in by a phone (QR), or by the phones of [username] (number). */
   createLoginRequest: (name: string, encPublicKey: string, signPublicKey: string, username?: string) =>
-    request<{ requestId: string; secret: string; expiresAt: string }>("POST", "/auth/login-requests", {
+    request<{ requestId: string; secret: string; expiresAt: string; code?: string | null }>("POST", "/auth/login-requests", {
       name,
       encPublicKey,
       signPublicKey,
@@ -105,4 +108,12 @@ export const api = {
     request<void>("POST", "/auth/password", { password, ...(currentPassword ? { currentPassword } : {}) }),
   registerWithInvite: (username: string, password: string, invite: string) =>
     request<Me>("POST", "/auth/register", { username, password, invite }),
+  setLabel: (deviceId: string, label: string | null) => request<void>("PUT", `/devices/${encodeURIComponent(deviceId)}/label`, { label }),
+  /** "Save your account": [password] is the browser-derived login secret (lib/password.ts). */
+  saveAccount: (username: string, password: string) => request<void>("POST", "/auth/account", { username, password }),
+  passwordVault: () => request<{ salt: string; iterations: number; keys: WrappedKey[] }>("GET", "/vault/password"),
+  setPasswordVault: (body: { deviceId: string; salt: string; iterations: number; publicKey: string; verifier: string; keys: WrappedKey[] }) =>
+    request<void>("PUT", "/vault/password", body),
+  selfApprove: (deviceId: string, verifier: string, keys: WrappedKey[]) =>
+    request<void>("POST", `/browser/devices/${encodeURIComponent(deviceId)}/self-approve`, { verifier, keys }),
 };

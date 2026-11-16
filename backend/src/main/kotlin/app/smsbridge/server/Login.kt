@@ -30,7 +30,11 @@ import kotlinx.serialization.Serializable
     /** "Sign in with your username": that account's phones are notified and confirm by number. */
     val username: String? = null,
 )
-@Serializable data class LoginRequestCreated(val requestId: String, val secret: String, val expiresAt: String)
+@Serializable data class LoginRequestCreated(
+    val requestId: String, val secret: String, val expiresAt: String,
+    /** 8 digits to type into the phone instead of scanning (QR requests only). */
+    val code: String? = null,
+)
 @Serializable data class LoginRequestStatus(val status: String, val challenge: String? = null, val deviceId: String? = null, val userId: String? = null)
 @Serializable data class LoginRequestForPhone(
     val id: String, val deviceId: String, val name: String, val encPublicKey: String, val signPublicKey: String, val createdAt: String,
@@ -48,24 +52,30 @@ class LoginRequestService(private val db: Db, private val auth: AuthService, pri
         val id = UUID.randomUUID()
         val secret = Secrets.token()
         val expires = OffsetDateTime.now().plus(LOGIN_REQUEST_LIFETIME)
+        var code: String? = null
         val target = db.tx {
             val user = body.username?.trim()?.takeIf { it.isNotEmpty() }?.let { name ->
                 query("SELECT id FROM users WHERE lower(username) = lower(?)", name) { it.uuid("id") }.singleOrNull()
             }
+            if (body.username == null) {
+                code = generateSequence { Secrets.digits(8) }.first { candidate ->
+                    query("SELECT 1 FROM login_requests WHERE short_code = ? AND status = 'pending' AND expires_at > now()", candidate) { 1 }.isEmpty()
+                }
+            }
             update(
                 """
-                INSERT INTO login_requests (id, secret_hash, user_id, device_id, name, enc_public_key, sign_public_key, expires_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO login_requests (id, secret_hash, user_id, device_id, name, enc_public_key, sign_public_key, expires_at, short_code)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """.trimIndent(),
                 id, Secrets.sha256(secret), user, UUID.randomUUID(), body.name.trim().take(64).ifEmpty { "Web browser" },
-                body.encPublicKey, body.signPublicKey, expires,
+                body.encPublicKey, body.signPublicKey, expires, code,
             )
             audit(user, null, "login_requested", if (body.username != null && user == null) "unknown_user" else "ok", ip)
             user
         }
         target?.let(notices::bump)
         // Same answer whether or not the username exists.
-        return LoginRequestCreated(id.toString(), secret, expires.toString())
+        return LoginRequestCreated(id.toString(), secret, expires.toString(), code)
     }
 
     /**
@@ -150,10 +160,11 @@ class LoginRequestService(private val db: Db, private val auth: AuthService, pri
             if (!claimed) throw ApiException(HttpStatusCode.NotFound, "not_found", "That sign-in request has expired.")
             update(
                 """
-                INSERT INTO devices (id, user_id, name, platform, enc_public_key, sign_public_key, vault_trusted_at, last_seen_at)
-                VALUES (?, ?, ?, 'web', ?, ?, now(), now())
+                INSERT INTO devices (id, user_id, name, platform, enc_public_key, sign_public_key, vault_trusted_at, last_seen_at, expires_at)
+                VALUES (?, ?, ?, 'web', ?, ?, now(), now(), ?)
                 """.trimIndent(),
                 deviceId, d.userId, request.name, request.encPublicKey, request.signPublicKey,
+                body.expiresInDays?.takeIf { it in 1..365 }?.let { OffsetDateTime.now().plusDays(it.toLong()) },
             )
             body.keys.forEach { k ->
                 val bytes = runCatching { Base64.getDecoder().decode(k.wrappedKey) }.getOrNull()?.takeIf { it.size in 32..512 }

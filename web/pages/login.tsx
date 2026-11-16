@@ -7,49 +7,55 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input, Label } from "@/components/ui/input";
 import QRCode from "qrcode";
 import { api, ApiError, type LoginStatus } from "@/lib/api";
-import { generateKeys, saveApprovedDevice } from "@/lib/browser-device";
+import { adoptWithPassword, generateKeys, saveApprovedDevice } from "@/lib/browser-device";
+import { loginSecret } from "@/lib/password";
 import { confirmNumber } from "@/lib/confirm";
 import { deviceFingerprint } from "@/lib/pair";
 import { useSession } from "@/lib/session";
 
-function PasswordForm({ initialCreating, onBack }: { initialCreating: boolean; onBack: () => void }) {
+/**
+ * Sign in with a username and password. The password stays in this browser: the server gets a
+ * derived login secret, and the password itself opens the messages (lib/password.ts). Accounts
+ * made before 0.10.0 sent the plain password; they are upgraded on their first sign-in here.
+ */
+function PasswordForm({ onBack }: { onBack: () => void }) {
   const { refreshMe } = useSession();
-  const router = useRouter();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [needCode, setNeedCode] = useState(false);
-  const [registrationOpen, setRegistrationOpen] = useState(false);
-  const [creating, setCreating] = useState(initialCreating);
-  const [invite, setInvite] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const codeRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    api.status().then((s) => setRegistrationOpen(s.registrationOpen), () => {});
-  }, []);
-  // An invite link (…/login/?invite=XXXXX-XXXXX) opens account creation with the code filled in.
-  useEffect(() => {
-    if (!router.isReady) return;
-    const code = typeof router.query.invite === "string" ? router.query.invite : "";
-    if (code) {
-      setInvite(code);
-      setCreating(true);
-    }
-  }, [router.isReady, router.query.invite]);
-  useEffect(() => {
     if (needCode) codeRef.current?.focus();
   }, [needCode]);
+
+  async function signIn(totp?: string) {
+    const secret = await loginSecret(username, password);
+    try {
+      return await api.login(username, secret, totp);
+    } catch (err) {
+      if (!(err instanceof ApiError) || err.code !== "invalid_credentials") throw err;
+      // An older account that still has the plain password: sign in once, then switch it over.
+      const me = await api.login(username, password, totp);
+      await api.setPassword(secret, password).catch(() => {});
+      return me;
+    }
+  }
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     setError(null);
     setBusy(true);
     try {
-      if (creating && invite.trim()) await api.registerWithInvite(username, password, invite);
-      else if (creating) await api.register(username, password);
-      else await api.login(username, password, needCode ? code : undefined);
+      const me = await signIn(needCode ? code : undefined);
+      try {
+        await adoptWithPassword(me.userId, password);
+      } catch {
+        /* The password does not open messages yet: the Messages page asks a phone instead. */
+      }
       setPassword("");
       setCode("");
       await refreshMe();
@@ -58,9 +64,11 @@ function PasswordForm({ initialCreating, onBack }: { initialCreating: boolean; o
         setNeedCode(true);
       } else if (err instanceof ApiError && err.status === 429) {
         setError("Too many attempts. Wait a minute and try again.");
+      } else if (err instanceof ApiError && err.code === "invalid_credentials") {
+        setError("Wrong username or password.");
+        if (needCode) setCode("");
       } else {
         setError(err instanceof ApiError ? err.message : "Could not reach the server.");
-        if (needCode) setCode("");
       }
     } finally {
       setBusy(false);
@@ -68,87 +76,46 @@ function PasswordForm({ initialCreating, onBack }: { initialCreating: boolean; o
   }
 
   return (
-      <Card className="w-full max-w-sm">
-        <CardHeader>
-          <CardTitle>{creating ? (registrationOpen ? "Create the owner account" : "Create your account") : "Sign in to SMS Bridge"}</CardTitle>
-          <CardDescription>
-            {needCode ? "Enter the 6-digit code from your authenticator app." : "Your self-hosted message dashboard."}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={submit} className="space-y-4">
-            {!needCode && (
-              <>
-                <div className="space-y-2">
-                  <Label htmlFor="username">Username</Label>
-                  <Input id="username" autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} required />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="password">Password</Label>
-                  <Input
-                    id="password"
-                    type="password"
-                    autoComplete={creating ? "new-password" : "current-password"}
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    minLength={creating ? 12 : undefined}
-                    required
-                  />
-                  {creating && <p className="text-xs text-muted-foreground">At least 12 characters.</p>}
-                </div>
-                {creating && !registrationOpen && (
-                  <div className="space-y-2">
-                    <Label htmlFor="invite">Invite code</Label>
-                    <Input
-                      id="invite"
-                      value={invite}
-                      onChange={(e) => setInvite(e.target.value)}
-                      placeholder="XXXXX-XXXXX"
-                      autoCapitalize="characters"
-                      spellCheck={false}
-                      className="font-mono"
-                      required
-                    />
-                  </div>
-                )}
-              </>
-            )}
-            {needCode && (
+    <Card className="w-full max-w-sm">
+      <CardHeader>
+        <CardTitle>Sign in</CardTitle>
+        <CardDescription>
+          {needCode ? "Enter the 6-digit code from your authenticator app." : "With the username and password you saved after linking your phone."}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={submit} className="space-y-4">
+          {!needCode && (
+            <>
               <div className="space-y-2">
-                <Label htmlFor="code">Authentication code</Label>
-                <Input
-                  id="code"
-                  ref={codeRef}
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                  pattern="[0-9 ]{6,7}"
-                  value={code}
-                  onChange={(e) => setCode(e.target.value)}
-                  required
-                />
-                <p className="text-xs text-muted-foreground">This browser will be remembered for 90 days.</p>
+                <Label htmlFor="username">Username</Label>
+                <Input id="username" autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} required />
               </div>
-            )}
-            {error && <Alert tone="error">{error}</Alert>}
-            <Button type="submit" className="w-full" disabled={busy}>
-              {busy ? "Please wait…" : creating ? "Create account" : needCode ? "Verify" : "Sign in"}
-            </Button>
-            {needCode && (
-              <Button type="button" variant="ghost" className="w-full" onClick={() => { setNeedCode(false); setCode(""); setPassword(""); }}>
-                Back
-              </Button>
-            )}
-            {!needCode && (
-              <Button type="button" variant="ghost" className="w-full" onClick={() => { setCreating((c) => !c); setError(null); }}>
-                {creating ? "I already have an account" : registrationOpen ? "Create an account with a password" : "I have an invite code"}
-              </Button>
-            )}
-            <Button type="button" variant="ghost" className="w-full" onClick={onBack}>
-              Sign in with your phone instead
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
+              <div className="space-y-2">
+                <Label htmlFor="password">Password</Label>
+                <Input id="password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+              </div>
+            </>
+          )}
+          {needCode && (
+            <div className="space-y-2">
+              <Label htmlFor="code">Authentication code</Label>
+              <Input id="code" ref={codeRef} inputMode="numeric" autoComplete="one-time-code" pattern="[0-9 ]{6,7}" value={code} onChange={(e) => setCode(e.target.value)} required />
+            </div>
+          )}
+          {error && <Alert tone="error">{error}</Alert>}
+          <Button type="submit" className="w-full" disabled={busy}>
+            {busy ? "Opening your messages…" : needCode ? "Verify" : "Sign in"}
+          </Button>
+          <Button type="button" variant="ghost" className="w-full" onClick={onBack}>
+            Scan a QR code instead
+          </Button>
+          <p className="text-center text-xs text-muted-foreground">
+            No account yet? Link your phone with the QR code, then choose &ldquo;Save your account&rdquo;.
+          </p>
+        </form>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -169,6 +136,7 @@ function browserName(): string {
  */
 function PhoneSignIn({ username, onApproved, onFailed }: { username?: string; onApproved: () => void; onFailed: (message: string) => void }) {
   const [qr, setQr] = useState<string | null>(null);
+  const [code, setCode] = useState<string | null>(null);
   const [number, setNumber] = useState<number | null>(null);
   const [attempt, setAttempt] = useState(0);
 
@@ -183,6 +151,7 @@ function PhoneSignIn({ username, onApproved, onFailed }: { username?: string; on
       if (!username) {
         const q = new URLSearchParams({ v: "1", s: window.location.origin, r: req.requestId, f: fingerprint });
         setQr(await QRCode.toDataURL(`smsbridge://login?${q.toString()}`, { margin: 1, width: 240 }));
+        setCode(req.code ?? null);
       }
       const started = Date.now();
       timer = setInterval(async () => {
@@ -237,6 +206,14 @@ function PhoneSignIn({ username, onApproved, onFailed }: { username?: string; on
       ) : (
         <div className="h-[240px] w-[240px] animate-pulse rounded-md bg-muted" />
       )}
+      {code && (
+        <div className="text-center">
+          <p className="text-xs text-muted-foreground">Can&apos;t scan? Type this code in the app:</p>
+          <p className="font-mono text-3xl font-semibold tracking-widest" aria-label={`Code ${code.split("").join(" ")}`}>
+            {code.slice(0, 4)} {code.slice(4)}
+          </p>
+        </div>
+      )}
     </div>
   );
 }
@@ -260,9 +237,7 @@ export default function Login() {
   const { me, refreshMe } = useSession();
   const router = useRouter();
   const version = useAppVersion();
-  const [mode, setMode] = useState<"phone" | "username" | "password" | "create">("phone");
-  const [username, setUsername] = useState("");
-  const [submitted, setSubmitted] = useState<string | null>(null);
+  const [mode, setMode] = useState<"phone" | "password">("phone");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const invite = router.isReady && typeof router.query.invite === "string" ? router.query.invite : "";
@@ -272,10 +247,7 @@ export default function Login() {
   }, [me, router]);
 
   const approved = useCallback(() => void refreshMe(), [refreshMe]);
-  const failed = useCallback((m: string) => {
-    setError(m);
-    setSubmitted(null);
-  }, []);
+  const failed = useCallback((m: string) => setError(m), []);
 
   async function acceptInvite() {
     setBusy(true);
@@ -290,13 +262,13 @@ export default function Login() {
     }
   }
 
-  if (mode === "password" || mode === "create") {
+  if (mode === "password") {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 px-4 py-8">
         <Head>
           <title>Sign in · SMS Bridge</title>
         </Head>
-        <PasswordForm initialCreating={mode === "create"} onBack={() => setMode("phone")} />
+        <PasswordForm onBack={() => setMode("phone")} />
       </div>
     );
   }
@@ -313,10 +285,9 @@ export default function Login() {
             <div className="space-y-5">
               <div className="space-y-1">
                 <h1 className="text-2xl font-semibold">Read your SMS on this computer</h1>
-                <p className="text-sm text-muted-foreground">New messages appear here the moment your phone gets them. No account, no password.</p>
+                <p className="text-sm text-muted-foreground">New messages appear here the moment your phone gets them. No account needed.</p>
               </div>
-              {mode === "phone" ? (
-                <ol className="space-y-4 text-sm">
+              <ol className="space-y-4 text-sm">
                   <li className="flex gap-3">
                     <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">1</span>
                     <div className="space-y-2">
@@ -334,17 +305,14 @@ export default function Login() {
                   <li className="flex gap-3">
                     <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">2</span>
                     <p>
-                      Open SMS Bridge and tap <strong>Scan QR code</strong>.
+                      Open SMS Bridge and tap <strong>Link a computer</strong>.
                     </p>
                   </li>
                   <li className="flex gap-3">
                     <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">3</span>
-                    <p>Point your phone at the code on this screen. That&apos;s it.</p>
+                    <p>Scan the QR code on this screen, or type the 8-digit code. That&apos;s it.</p>
                   </li>
                 </ol>
-              ) : (
-                <p className="text-sm text-muted-foreground">Type your username. Your phone gets a notification and you tap the number shown here.</p>
-              )}
               {invite && (
                 <Button variant="outline" disabled={busy} onClick={() => void acceptInvite()}>
                   {busy ? "Please wait…" : "Accept the invite"}
@@ -353,33 +321,13 @@ export default function Login() {
             </div>
             <div className="flex flex-col items-center gap-3 md:w-[260px]">
               {error && <Alert tone="error">{error}</Alert>}
-              {mode === "phone" && <PhoneSignIn onApproved={approved} onFailed={failed} />}
-              {mode === "username" && !submitted && (
-                <form
-                  className="w-full space-y-3"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    setError(null);
-                    setSubmitted(username.trim());
-                  }}
-                >
-                  <Label htmlFor="login-username">Your username</Label>
-                  <Input id="login-username" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" required />
-                  <Button type="submit" className="w-full">Continue</Button>
-                </form>
-              )}
-              {mode === "username" && submitted && <PhoneSignIn username={submitted} onApproved={approved} onFailed={failed} />}
-              {mode === "phone" && <p className="text-center text-xs text-muted-foreground">The code refreshes on its own.</p>}
+              <PhoneSignIn onApproved={approved} onFailed={failed} />
+              <p className="text-center text-xs text-muted-foreground">The codes refresh on their own.</p>
             </div>
           </CardContent>
         </Card>
         <div className="mt-3 flex flex-wrap justify-center gap-1 text-sm">
-          {mode !== "username" ? (
-            <Button variant="ghost" size="sm" onClick={() => { setMode("username"); setError(null); }}>Can&apos;t scan? Use my username</Button>
-          ) : (
-            <Button variant="ghost" size="sm" onClick={() => { setMode("phone"); setSubmitted(null); setError(null); }}>Scan a QR code instead</Button>
-          )}
-          <Button variant="ghost" size="sm" onClick={() => setMode("password")}>Sign in with a password</Button>
+          <Button variant="ghost" size="sm" onClick={() => setMode("password")}>Have an account? Sign in with username and password</Button>
         </div>
       </div>
     </div>

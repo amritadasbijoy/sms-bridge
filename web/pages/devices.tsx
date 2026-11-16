@@ -90,7 +90,7 @@ export default function Devices() {
                   <li key={d.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
                     <div className="space-y-1">
                       <div className="flex items-center gap-2">
-                        <span className="font-medium">{d.name}</span>
+                        <span className="font-medium">{d.label ? `${d.label} · ${d.name}` : d.name}</span>
                         <span className="text-xs text-muted-foreground">{d.platform === "web" ? "Browser" : "Phone"}</span>
                         {d.revokedAt ? (
                           <Badge variant="destructive">Revoked</Badge>
@@ -103,6 +103,7 @@ export default function Devices() {
                       <p className="text-xs text-muted-foreground">
                         Added {formatDateTime(d.createdAt)} · Last seen {formatDateTime(d.lastSeenAt)}
                         {d.revokedAt && ` · Revoked ${formatDateTime(d.revokedAt)}`}
+                        {!d.revokedAt && d.expiresAt && ` · Unlinks ${formatDateTime(d.expiresAt)}`}
                       </p>
                     </div>
                     {!d.revokedAt &&

@@ -46,7 +46,11 @@ import kotlinx.serialization.Serializable
     val linkProof: String? = null,
 )
 @Serializable data class LinkProof(val proof: String)
-@Serializable data class Approve(val keys: List<WrappedKey>)
+@Serializable data class Approve(
+    val keys: List<WrappedKey>,
+    /** Unlink this browser automatically after so many days (null: never). */
+    val expiresInDays: Int? = null,
+)
 @Serializable data class AccountDevice(val id: String, val name: String, val platform: String)
 @Serializable data class UploadEvent(val eventId: String, val deviceSequence: Long, val keyVersion: Int, val ciphertext: String, val signature: String)
 @Serializable data class UploadBatch(val events: List<UploadEvent>)
@@ -97,7 +101,7 @@ class SyncService(private val db: Db, private val wake: Notices = Notices()) {
                 """
                 SELECT d.id, d.user_id, d.vault_trusted_at, d.sign_public_key, d.enc_public_key
                 FROM device_tokens t JOIN devices d ON d.id = t.device_id
-                WHERE t.token_hash = ? AND t.revoked_at IS NULL AND d.revoked_at IS NULL
+                WHERE t.token_hash = ? AND t.revoked_at IS NULL AND d.revoked_at IS NULL AND (d.expires_at IS NULL OR d.expires_at > now())
                 """.trimIndent(),
                 hash,
             ) { DeviceContext(it.uuid("id"), it.uuid("user_id"), it.time("vault_trusted_at") != null, it.getString("sign_public_key"), it.getString("enc_public_key")) }
@@ -137,6 +141,7 @@ class SyncService(private val db: Db, private val wake: Notices = Notices()) {
             }
             update("DELETE FROM sync_events WHERE user_id = ?", d.userId)
             update("DELETE FROM vault_keys WHERE user_id = ?", d.userId)
+            update("DELETE FROM password_vault WHERE user_id = ?", d.userId)
             update("DELETE FROM vaults WHERE user_id = ?", d.userId)
             update("INSERT INTO vaults (user_id, current_version) VALUES (?, 1)", d.userId)
             putKey(d.userId, 1, "recovery", recovery.wrappedKey, d.deviceId)

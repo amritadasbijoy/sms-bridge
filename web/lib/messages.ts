@@ -23,6 +23,9 @@ export interface EventPayload {
   seen?: boolean;
   status?: number | null;
   sub?: number | null;
+  /** SIM slot (1, 2) and carrier name, from app 0.10.0. */
+  slot?: number | null;
+  carrier?: string | null;
   src?: string | null;
 }
 
@@ -46,6 +49,9 @@ export interface Message {
   status: number | null;
   /** Devices that uploaded this message. */
   deviceIds: string[];
+  /** SIM slot (1, 2) the message came in on or went out from, when the phone reported it. */
+  simSlot: number | null;
+  carrier: string | null;
 }
 
 export interface Conversation {
@@ -127,6 +133,8 @@ export function buildMessages(events: Iterable<DecryptedEvent>): MessageStore {
       read: p.read ?? false,
       status: p.status ?? null,
       deviceIds: [e.deviceId],
+      simSlot: typeof p.slot === "number" && p.slot > 0 ? p.slot : null,
+      carrier: p.carrier?.trim() || null,
     });
   }
   const messages = [...byContent.values()].sort((a, b) => b.date - a.date);
@@ -159,4 +167,19 @@ export function search(messages: Message[], query: string): Message[] {
   const q = query.trim().toLowerCase();
   if (!q) return messages;
   return messages.filter((m) => m.body.toLowerCase().includes(q) || m.address.toLowerCase().includes(q));
+}
+
+/** "SIM 1 · Grameenphone", or null when the phone did not say. */
+export function simLabel(m: Pick<Message, "simSlot" | "carrier">): string | null {
+  if (m.simSlot == null) return null;
+  return m.carrier ? `SIM ${m.simSlot} · ${m.carrier}` : `SIM ${m.simSlot}`;
+}
+
+const OTP_HINT = /\b(code|otp|pin|passcode|password|verification|verify|one[- ]time)\b|কোড|ওটিপি|পিন/i;
+
+/** The one-time code in a message ("Your code is 482913"), for the Copy button. */
+export function otpOf(body: string): string | null {
+  if (!OTP_HINT.test(body)) return null;
+  const match = body.match(/(?<![\d.,:/-])(\d{4,8})(?![\d.,:/-]\d)/);
+  return match ? match[1]! : null;
 }

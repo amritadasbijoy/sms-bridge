@@ -3,9 +3,12 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Shell } from "@/components/shell";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { SaveAccountCard } from "@/components/save-account";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Label } from "@/components/ui/input";
 import { api, ApiError } from "@/lib/api";
+import { ensureDevice, savePasswordVault } from "@/lib/browser-device";
+import { loginSecret, MIN_PASSWORD } from "@/lib/password";
 import { useSession } from "@/lib/session";
 import { formatDateTime } from "@/lib/utils";
 
@@ -111,66 +114,34 @@ function TwoFactor() {
   );
 }
 
-function Invites() {
-  const [list, setList] = useState<{ createdAt: string; expiresAt: string; used: boolean; usedAt: string | null }[]>([]);
-  const [code, setCode] = useState<{ code: string; expiresAt: string } | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const load = () => {
-    api.invites().then(setList, () => {});
-  };
-  useEffect(load, []);
-
-  async function create() {
-    setError(null);
-    try {
-      setCode(await api.createInvite());
-      load();
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Could not create an invite.");
-    }
-  }
-
-  const open = list.filter((i) => !i.used && new Date(i.expiresAt) > new Date()).length;
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Invite someone</CardTitle>
-        <CardDescription>
-          Sign-up is closed. An invite link lets one person create their own account (with their own phones and messages,
-          separate from yours). Codes work once and expire after 7 days.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {code && <InviteLink code={code.code} expiresAt={code.expiresAt} />}
-        {error && <Alert tone="error">{error}</Alert>}
-        <Button onClick={create}>{code ? "Create another" : "Create invite link"}</Button>
-        <p className="text-xs text-muted-foreground">
-          {list.length === 0 ? "No invites yet." : `${list.filter((i) => i.used).length} used · ${open} waiting`}
-        </p>
-      </CardContent>
-    </Card>
-  );
-}
-
-/** Username, and a password as a fallback for signing in without a phone. */
+/** Username and password. Accounts made by scanning save them with the card on the Messages page. */
 function Account() {
-  const { me, refreshMe } = useSession();
+  const { me, vault, refreshMe } = useSession();
   const [password, setPassword] = useState("");
   const [current, setCurrent] = useState("");
   const [message, setMessage] = useState<{ tone: "info" | "error"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   if (!me) return null;
+  if (!me.hasPassword) return <SaveAccountCard dismissible={false} />;
 
   async function save(e: FormEvent) {
     e.preventDefault();
+    if (!me) return;
+    if (password.length < MIN_PASSWORD) return setMessage({ tone: "error", text: `Use at least ${MIN_PASSWORD} characters.` });
     setBusy(true);
     setMessage(null);
     try {
-      await api.setPassword(password, me?.hasPassword ? current : undefined);
+      const next = await loginSecret(me.username, password);
+      // Older accounts may still have the plain password on the server.
+      await api.setPassword(next, await loginSecret(me.username, current)).catch((err) => {
+        if (err instanceof ApiError && err.code === "invalid_credentials") return api.setPassword(next, current);
+        throw err;
+      });
+      if (vault.status === "ready") await savePasswordVault(await ensureDevice(me.userId), password);
       setPassword("");
       setCurrent("");
       await refreshMe();
-      setMessage({ tone: "info", text: "Password saved. You can also sign in with it when your phone is not at hand." });
+      setMessage({ tone: "info", text: "Password saved. It opens your messages in any browser." });
     } catch (err) {
       setMessage({ tone: "error", text: err instanceof ApiError ? err.message : "Could not save the password." });
     } finally {
@@ -183,58 +154,25 @@ function Account() {
       <CardHeader>
         <CardTitle>Account</CardTitle>
         <CardDescription>
-          Username <span className="font-mono">{me.username}</span>. You sign in by scanning with your phone
-          {me.hasPassword ? " or with your password." : ". Add a password so you can still sign in if you lose the phone."}
+          Username <span className="font-mono">{me.username}</span>. Sign in anywhere with it and your password, or scan with your phone.
         </CardDescription>
       </CardHeader>
       <CardContent>
         <form onSubmit={save} className="max-w-xs space-y-3">
           {message && <Alert tone={message.tone}>{message.text}</Alert>}
-          {me.hasPassword && (
-            <div className="space-y-2">
-              <Label htmlFor="current-password">Current password</Label>
-              <Input id="current-password" type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} required />
-            </div>
-          )}
           <div className="space-y-2">
-            <Label htmlFor="new-password">{me.hasPassword ? "New password" : "Password"}</Label>
-            <Input id="new-password" type="password" autoComplete="new-password" minLength={12} value={password} onChange={(e) => setPassword(e.target.value)} required />
-            <p className="text-xs text-muted-foreground">At least 12 characters.</p>
+            <Label htmlFor="current-password">Current password</Label>
+            <Input id="current-password" type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} required />
           </div>
-          <Button type="submit" variant={me.hasPassword ? "outline" : "default"} disabled={busy}>
-            {me.hasPassword ? "Change password" : "Add a password"}
-          </Button>
+          <div className="space-y-2">
+            <Label htmlFor="new-password">New password</Label>
+            <Input id="new-password" type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+            <p className="text-xs text-muted-foreground">At least {MIN_PASSWORD} characters. You can enter the same password again to let it open your messages.</p>
+          </div>
+          <Button type="submit" variant="outline" disabled={busy}>{busy ? "Saving…" : "Save password"}</Button>
         </form>
       </CardContent>
     </Card>
-  );
-}
-
-/** The invite as a link to send; opening it shows account creation with the code filled in. */
-function InviteLink({ code, expiresAt }: { code: string; expiresAt: string }) {
-  const link = `${typeof window !== "undefined" ? window.location.origin : ""}/login/?invite=${encodeURIComponent(code)}`;
-  const [copied, setCopied] = useState(false);
-  const canShare = typeof navigator !== "undefined" && typeof navigator.share === "function";
-  return (
-    <div className="space-y-2 rounded-md border bg-muted px-4 py-3">
-      <p className="break-all font-mono text-sm">{link}</p>
-      <div className="flex flex-wrap gap-2">
-        <Button
-          size="sm"
-          onClick={() => void navigator.clipboard.writeText(link).then(() => setCopied(true), () => setCopied(false))}
-        >
-          {copied ? "Copied" : "Copy link"}
-        </Button>
-        {canShare && (
-          <Button size="sm" variant="outline" onClick={() => void navigator.share({ title: "SMS Bridge invite", url: link }).catch(() => {})}>
-            Share…
-          </Button>
-        )}
-      </div>
-      <p className="text-xs text-muted-foreground">
-        Works once, until {formatDateTime(expiresAt)}. Code if they need it: <span className="font-mono">{code}</span>
-      </p>
-    </div>
   );
 }
 
@@ -295,26 +233,23 @@ function Browsers() {
 }
 
 export default function Settings() {
+  const { me } = useSession();
   return (
     <Shell title="Settings">
       <div className="max-w-2xl space-y-6">
         <Account />
-        <Invites />
         <ThisBrowser />
-        <TwoFactor />
-        <Browsers />
+        {me?.totpEnabled && <TwoFactor />}
+        {me?.totpEnabled && <Browsers />}
         <Card>
           <CardHeader>
-            <CardTitle>About browser access</CardTitle>
+            <CardTitle>Privacy</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 text-sm text-muted-foreground">
+            <p>This page is read-only. To send or delete messages, use your phone.</p>
             <p>
-              This dashboard is read-only. To send or delete messages, use your phone; nothing here can change your
-              messages.
-            </p>
-            <p>
-              A browser reads messages only after one of your phones approves it (matching safety codes) or after you
-              enter the recovery key. Decryption happens in the browser; the server never sees your messages.
+              Messages are encrypted on your phone and opened only in browsers you linked or signed into with your password. The
+              server never sees your messages or your password.
             </p>
           </CardContent>
         </Card>

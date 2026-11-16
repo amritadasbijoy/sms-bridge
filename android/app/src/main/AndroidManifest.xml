@@ -11,6 +11,8 @@
     <uses-permission android:name="android.permission.READ_SMS" />
     <!-- Receive the SMS_RECEIVED broadcast for new incoming messages (runtime permission). -->
     <uses-permission android:name="android.permission.RECEIVE_SMS" />
+    <!-- Optional: which SIM (1 or 2) a message used, shown as "SIM 1 · carrier" in the browser. -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <!-- Re-arm periodic reconciliation after a reboot. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- Sending, used only while SMS Bridge is the default SMS app (the SMS role grants it). -->

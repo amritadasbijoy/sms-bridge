@@ -42,10 +42,6 @@ import app.smsbridge.feature.settings.SettingsScreen
  */
 enum class TopDestination(val route: String, val label: String, val icon: ImageVector?, @DrawableRes val iconRes: Int? = null) {
     HOME(Routes.HOME, "Home", Icons.Filled.Home),
-    MESSAGES(Routes.MESSAGES, "Messages", Icons.Filled.Email),
-    BACKUP(Routes.BACKUP, "Backup", null, R.drawable.ic_backup),
-    TRANSFER(Routes.TRANSFER, "Transfer", null, R.drawable.ic_transfer),
-    SYNC(Routes.SYNC, "Sync", null, R.drawable.ic_sync),
     SETTINGS(Routes.SETTINGS, "Settings", Icons.Filled.Settings),
 }
 
@@ -60,7 +56,7 @@ fun SmsBridgeRoot(navigationRequests: NavigationRequests) {
         when (val request = pending) {
             is NavRequest.OpenThread -> navController.navigate(Routes.thread(request.addressKey)) { launchSingleTop = true }
             is NavRequest.Compose -> navController.navigate(Routes.compose(request.recipient, request.body))
-            NavRequest.OpenSync -> navController.navigateTopLevel(Routes.SYNC)
+            NavRequest.OpenSync -> navController.navigateTopLevel(Routes.HOME)
             NavRequest.OpenRemote -> navController.navigate(Routes.REMOTE) { launchSingleTop = true }
             null -> return@LaunchedEffect
         }
@@ -93,9 +89,7 @@ fun SmsBridgeRoot(navigationRequests: NavigationRequests) {
             startDestination = Routes.HOME,
             modifier = Modifier.padding(padding),
         ) {
-            composable(Routes.HOME) {
-                DashboardScreen(onOpenMessages = { navController.navigateTopLevel(Routes.MESSAGES) })
-            }
+            composable(Routes.HOME) { app.smsbridge.feature.home.HomeScreen() }
             composable(Routes.MESSAGES) {
                 MessagesScreen(
                     onOpenThread = { navController.navigate(Routes.thread(it)) },
@@ -106,7 +100,7 @@ fun SmsBridgeRoot(navigationRequests: NavigationRequests) {
             composable(Routes.TRANSFER) { TransferScreen() }
             composable(Routes.SYNC) { SyncScreen(onOpenRemote = { navController.navigate(Routes.REMOTE) { launchSingleTop = true } }) }
             composable(Routes.REMOTE) { app.smsbridge.feature.remote.RemoteMessagesScreen() }
-            composable(Routes.SETTINGS) { SettingsScreen() }
+            composable(Routes.SETTINGS) { SettingsScreen(onOpen = { navController.navigate(it) { launchSingleTop = true } }) }
             composable(
                 Routes.THREAD,
                 arguments = listOf(navArgument("key") { type = NavType.StringType; defaultValue = "" }),

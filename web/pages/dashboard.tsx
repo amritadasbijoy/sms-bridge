@@ -1,105 +1,182 @@
-import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useDesktopAlerts } from "@/components/phone-tabs";
+import { SaveAccountCard } from "@/components/save-account";
 import { Shell } from "@/components/shell";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { AddPhoneButton } from "@/components/add-phone";
-import { UnlockCard } from "@/components/vault-gate";
-import { api, type Device } from "@/lib/api";
-import { conversations } from "@/lib/messages";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { VaultGate } from "@/components/vault-gate";
+import { conversations, otpOf, simLabel, type Conversation, type Message } from "@/lib/messages";
 import { usePhones } from "@/lib/phones";
 import { useSession } from "@/lib/session";
-import { formatShort } from "@/lib/utils";
+import { cn, formatDateTime, formatShort } from "@/lib/utils";
 
-function Stat({ label, value, href }: { label: string; value: string; href?: string }) {
-  const body = (
-    <Card className="h-full transition-colors hover:bg-accent/40">
-      <CardHeader className="pb-2">
-        <CardDescription>{label}</CardDescription>
-        <CardTitle className="text-2xl">{value}</CardTitle>
-      </CardHeader>
-    </Card>
+function CopyCode({ code }: { code: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={() => {
+        void navigator.clipboard?.writeText(code).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        });
+      }}
+      className="mt-1.5 inline-flex items-center gap-1 rounded-md border border-current/30 bg-background/90 px-2 py-0.5 font-mono text-sm font-semibold text-foreground hover:bg-background"
+      title="Copy the code"
+    >
+      {copied ? "Copied ✓" : `Copy ${code}`}
+    </button>
   );
-  return href ? <Link href={href}>{body}</Link> : body;
 }
 
-export default function Dashboard() {
-  const { vault, store, live } = useSession();
-  const { phones, selected, filter, labelOf } = usePhones();
-  const [devices, setDevices] = useState<Device[] | null>(null);
-  // Reload when the vault opens: a phone connected by scanning appears without a page reload.
-  useEffect(() => {
-    api.devices().then(setDevices, () => setDevices([]));
-  }, [vault.status]);
+function Bubble({ m, phoneName }: { m: Message; phoneName: string | null }) {
+  const outgoing = m.box !== "INBOX";
+  const code = outgoing ? null : otpOf(m.body);
+  const where = [phoneName, simLabel(m)].filter(Boolean).join(" · ");
+  return (
+    <div className={cn("flex", outgoing ? "justify-end" : "justify-start")}>
+      <div
+        className={cn(
+          "max-w-[85%] rounded-lg px-3 py-2 text-sm",
+          outgoing ? "bg-primary text-primary-foreground" : "bg-muted",
+          m.box === "FAILED" && "bg-destructive text-destructive-foreground",
+        )}
+      >
+        <p className="whitespace-pre-wrap break-words">{m.body}</p>
+        {code && <CopyCode code={code} />}
+        <p className="mt-1 text-[11px] opacity-70">
+          {formatDateTime(m.date)}
+          {where && ` · ${where}`}
+          {m.box === "FAILED" && " · failed"}
+        </p>
+      </div>
+    </div>
+  );
+}
 
-  const shown = useMemo(() => filter(store.messages), [store, filter]);
-  const stats = useMemo(() => {
-    const m = shown;
-    return {
-      total: m.length,
-      inbox: m.filter((x) => x.box === "INBOX").length,
-      unread: m.filter((x) => x.box === "INBOX" && !x.read).length,
-      sent: m.filter((x) => x.box === "SENT").length,
-      threads: conversations(m).length,
-    };
-  }, [shown]);
-  const ready = vault.status === "ready";
+function Thread({ c, onBack }: { c: Conversation; onBack: () => void }) {
+  const { phones, labelOf } = usePhones();
+  const end = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    // Block body: scrollIntoView returns a Promise in newer browsers, which React would treat as a cleanup.
+    end.current?.scrollIntoView({ block: "end" });
+  }, [c]);
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex items-center gap-2 border-b px-3 py-2.5">
+        <button className="text-sm text-primary md:hidden" onClick={onBack} aria-label="Back to conversations">←</button>
+        <span className="font-medium">{c.address}</span>
+      </div>
+      <div className="flex-1 space-y-2 overflow-y-auto p-3 sm:p-4">
+        {c.messages.map((m) => (
+          <Bubble key={m.key} m={m} phoneName={phones.length > 1 ? labelOf(m.deviceIds[0]!) : null} />
+        ))}
+        <div ref={end} />
+      </div>
+      <div className="border-t px-4 py-2 text-xs text-muted-foreground">Read-only: reply from your phone.</div>
+    </div>
+  );
+}
+
+function Messages() {
+  const { store, live } = useSession();
+  const { phones, selected, filter } = usePhones();
+  const alerts = useDesktopAlerts();
+  const [sim, setSim] = useState<number | null>(null);
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState<string | null>(null);
+
+  const phoneMessages = useMemo(() => filter(store.messages), [store, filter]);
+  // SIM filter: only offered when the shown messages come from more than one SIM slot.
+  const slots = useMemo(() => [...new Set(phoneMessages.map((m) => m.simSlot).filter((s): s is number => s != null))].sort(), [phoneMessages]);
+  useEffect(() => setSim(null), [selected]);
+  const shown = useMemo(() => (sim == null ? phoneMessages : phoneMessages.filter((m) => m.simSlot === sim)), [phoneMessages, sim]);
+  const all = useMemo(() => conversations(shown), [shown]);
+  const list = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return q ? all.filter((c) => c.address.toLowerCase().includes(q) || c.messages.some((m) => m.body.toLowerCase().includes(q))) : all;
+  }, [all, query]);
+  const current = all.find((c) => c.addressKey === open) ?? null;
+  const carrierOf = (slot: number) => phoneMessages.find((m) => m.simSlot === slot && m.carrier)?.carrier;
 
   return (
-    <Shell title="Dashboard" phoneTabs>
-      <div className="space-y-6">
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          <Stat label="Phones" value={devices ? String(phones.filter((p) => !p.removed).length) : "…"} href="/devices/" />
-          <Stat label="Inbox" value={ready ? stats.inbox.toLocaleString() : "Locked"} href="/inbox/" />
-          <Stat label="Sent" value={ready ? stats.sent.toLocaleString() : "Locked"} href="/sent/" />
-          <Stat label="Conversations" value={ready ? stats.threads.toLocaleString() : "Locked"} href="/conversations/" />
-        </div>
-        {ready && (
-          <Card>
-            <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 space-y-0">
-              <div className="space-y-1">
-                <CardTitle>Your phones</CardTitle>
-                <CardDescription>
-                  {phones.length === 0 ? "No phone yet." : phones.filter((p) => !p.removed).map((p) => p.label).join(" · ")}
-                </CardDescription>
-              </div>
-              <AddPhoneButton />
-            </CardHeader>
-          </Card>
+    <>
+      <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
+        {slots.length > 1 && (
+          <div className="flex gap-1" role="group" aria-label="Show SIM">
+            {[null, ...slots].map((s) => (
+              <button
+                key={s ?? "all"}
+                onClick={() => setSim(s)}
+                aria-pressed={sim === s}
+                className={cn("rounded-full border px-3 py-1", sim === s ? "border-primary bg-primary/10 font-medium text-primary" : "hover:bg-accent")}
+              >
+                {s == null ? "Both SIMs" : `SIM ${s}${carrierOf(s) ? ` · ${carrierOf(s)}` : ""}`}
+              </button>
+            ))}
+          </div>
         )}
-        {!ready ? (
-          <UnlockCard />
-        ) : (
-          <Card>
-            <CardHeader>
-              <CardTitle>Latest messages</CardTitle>
-              <CardDescription>
-                {stats.unread > 0 ? `${stats.unread.toLocaleString()} unread · ` : ""}
-                {live ? "Live: new messages appear automatically." : "Not live; reconnecting…"}
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {shown.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No messages synced yet. New SMS on your phone appear here within seconds.</p>
-              ) : (
-                <ul className="divide-y">
-                  {shown.slice(0, 8).map((m) => (
-                    <li key={m.key} className="flex items-baseline justify-between gap-4 py-2 text-sm">
-                      <span className="min-w-0 flex-1 truncate">
-                        <span className="font-medium">{m.box === "SENT" ? `To ${m.address}` : m.address}</span>
-                        <span className="text-muted-foreground"> · {m.body}</span>
-                      </span>
-                      <span className="shrink-0 text-xs text-muted-foreground">
-                        {phones.length > 1 && !selected && <span className="hidden sm:inline">{labelOf(m.deviceIds[0]!)} · </span>}
-                        {formatShort(m.date)}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </CardContent>
-          </Card>
-        )}
+        <span className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
+          <span className={cn("h-2 w-2 rounded-full", live ? "bg-green-500" : "bg-muted-foreground/40")} />
+          {live ? "Live" : "Reconnecting…"}
+          {alerts.supported && (
+            <Button variant="ghost" size="sm" onClick={() => void alerts.toggle()}>
+              {alerts.on ? "🔔 Alerts on" : "🔕 Turn on alerts"}
+            </Button>
+          )}
+        </span>
       </div>
+      <div className="grid h-[calc(100vh-15rem)] min-h-[420px] grid-cols-1 overflow-hidden rounded-lg border md:grid-cols-[340px_1fr]">
+        <div className={cn("flex min-h-0 flex-col border-r", current && "hidden md:flex")}>
+          <div className="border-b p-2">
+            <Input type="search" placeholder="Search messages" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Search messages" />
+          </div>
+          <ul className="flex-1 overflow-y-auto">
+            {list.map((c) => {
+              const code = c.latest.box === "INBOX" ? otpOf(c.latest.body) : null;
+              return (
+                <li key={c.addressKey}>
+                  <button onClick={() => setOpen(c.addressKey)} className={cn("w-full px-4 py-3 text-left hover:bg-accent", c.addressKey === open && "bg-accent")}>
+                    <div className="flex items-center justify-between gap-2 text-sm">
+                      <span className="truncate font-medium">{c.address}</span>
+                      <span className="shrink-0 text-xs text-muted-foreground">{formatShort(c.latest.date)}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="truncate text-xs text-muted-foreground">{c.latest.body}</span>
+                      {code && <span className="shrink-0 rounded bg-primary/10 px-1.5 font-mono text-xs text-primary">{code}</span>}
+                      {c.unread > 0 && <Badge className="ml-auto shrink-0">{c.unread}</Badge>}
+                    </div>
+                  </button>
+                </li>
+              );
+            })}
+            {list.length === 0 && (
+              <li className="p-4 text-sm text-muted-foreground">
+                {query ? "Nothing matches." : phones.length === 0 ? "Link a phone to see its messages here." : "No messages yet. New SMS appear here the moment the phone gets them."}
+              </li>
+            )}
+          </ul>
+        </div>
+        <div className={cn("min-h-0", !current && "hidden md:block")}>
+          {current ? (
+            <Thread c={current} onBack={() => setOpen(null)} />
+          ) : (
+            <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Choose a conversation.</div>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+/** The one page: phone tabs, conversations and the open chat, like WhatsApp Web. */
+export default function MessagesPage() {
+  return (
+    <Shell title="Messages" phoneTabs>
+      <SaveAccountCard />
+      <VaultGate>
+        <Messages />
+      </VaultGate>
     </Shell>
   );
 }
