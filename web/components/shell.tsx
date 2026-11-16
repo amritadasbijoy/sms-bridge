@@ -39,6 +39,9 @@ export function Shell({ title, children, phoneTabs }: { title: string; children:
           </Link>
           <div className="flex items-center gap-2 text-sm">
             {vault.status === "ready" && <AddPhoneButton size="sm" className="hidden sm:inline-flex" />}
+            <span className="hidden max-w-[12rem] truncate text-muted-foreground sm:inline" title="Signed in as">
+              👤 {me.username}
+            </span>
             <Button variant="ghost" size="sm" onClick={() => void signOut().then(() => router.replace("/login/"))}>
               Sign out
             </Button>
@@ -58,6 +61,7 @@ export function Shell({ title, children, phoneTabs }: { title: string; children:
               {n.label}
             </Link>
           ))}
+          <span className="ml-auto self-center whitespace-nowrap pl-2 text-sm text-muted-foreground sm:hidden">👤 {me.username}</span>
         </nav>
       </header>
       <ConnectRequests />
