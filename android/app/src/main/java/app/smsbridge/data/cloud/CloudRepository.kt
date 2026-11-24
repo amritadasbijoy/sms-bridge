@@ -319,6 +319,34 @@ class CloudRepository @Inject constructor(
         disconnect()
     }
 
+    /** Whether "Delete my account" must ask for the account password; null if this phone has no account. */
+    suspend fun accountNeedsPassword(): Boolean? = io {
+        if (refresh() !is CloudState.Ready) return@io null
+        runCatching { api().accountInfo().second }.getOrNull()
+    }
+
+    /**
+     * "Delete my account": the server deletes the account, every linked device and all its messages;
+     * this phone then forgets the link. The password never leaves the phone: like the website, it
+     * sends a login secret derived from it (see web/lib/password.ts).
+     */
+    suspend fun deleteAccount(password: String?): CloudState = io {
+        val (username, hasPassword) = api().accountInfo()
+        if (!hasPassword) {
+            api().deleteAccount(null)
+        } else {
+            val pw = password.orEmpty()
+            try {
+                api().deleteAccount(loginSecret(username, pw))
+            } catch (e: CloudHttpException) {
+                // Older accounts may still check the plain password.
+                if (e.code != "wrong_password") throw e
+                api().deleteAccount(pw)
+            }
+        }
+        disconnect()
+    }
+
     suspend fun phoneName(): String = settings.getString(K_PHONE_NAME) ?: devices.localDevice.first()?.name ?: "This phone"
 
     /** True until the user named this phone (asked once after the first link). */
@@ -832,4 +860,13 @@ abstract class CloudModule {
         @Singleton
         fun provideKeyProtector(): KeyProtector = KeystoreKeyProtector()
     }
+}
+
+/** PBKDF2-SHA256 (600 000 rounds) of the password salted with the username: what the server checks. */
+internal fun loginSecret(username: String, password: String): String {
+    val salt = "sms-bridge login v1|${username.trim().lowercase()}".toByteArray()
+    val spec = javax.crypto.spec.PBEKeySpec(java.text.Normalizer.normalize(password, java.text.Normalizer.Form.NFKC).toCharArray(), salt, 600_000, 256)
+    val bytes = javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded
+    spec.clearPassword()
+    return java.util.Base64.getEncoder().encodeToString(bytes)
 }

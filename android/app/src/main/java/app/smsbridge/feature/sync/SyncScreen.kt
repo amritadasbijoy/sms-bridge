@@ -644,7 +644,11 @@ internal fun StayReachableCard() {
         if (!batteryOk) {
             OutlinedButton(onClick = {
                 @android.annotation.SuppressLint("BatteryLife")
-                val intent = android.content.Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, android.net.Uri.parse("package:${context.packageName}"))
+                val intent = if (app.smsbridge.BuildConfig.PLAY) {
+                    android.content.Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                } else {
+                    android.content.Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, android.net.Uri.parse("package:${context.packageName}"))
+                }
                 runCatching { context.startActivity(intent) }
             }, modifier = Modifier.padding(top = 8.dp)) { Text("Allow running in the background") }
         }

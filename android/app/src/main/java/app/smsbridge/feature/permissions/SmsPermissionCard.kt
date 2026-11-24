@@ -53,18 +53,18 @@ fun SmsPermissionCard(
 
     SectionCard(title = "Set up SMS access", modifier = modifier) {
         Text(
-            "SMS Bridge keeps a private archive of your text messages on this phone. " +
-                "It needs two permissions. You can grant one, both, or neither; " +
-                "the app tells you what works without them.",
+            "SMS Bridge shows your text messages on a computer you link. It needs two permissions. " +
+                "Messages leave this phone only after you link a computer and choose what to share, and " +
+                "they are encrypted first, so our server cannot read them.",
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.padding(top = 4.dp),
         )
 
         PermissionStep(
             title = "Read existing messages",
-            explanation = "Copies the messages already on this phone into SMS Bridge's local archive, " +
-                "and lets it notice messages you send from your usual messaging app. " +
-                "Nothing is uploaded.",
+            explanation = "Reads the messages already on this phone, so a linked computer can show your " +
+                "recent ones (you choose: new only, 7 days or 30 days). Also notices messages you send " +
+                "from your usual messaging app.",
             granted = state.canReadSms,
             blocked = readBlocked,
             onRequest = { readLauncher.launch(Manifest.permission.READ_SMS) },
@@ -72,8 +72,8 @@ fun SmsPermissionCard(
         )
         PermissionStep(
             title = "Capture new incoming messages",
-            explanation = "Saves each new message the moment Android delivers it, so it stays archived " +
-                "even if it is later deleted from your messaging app.",
+            explanation = "Notices each new message the moment it arrives, so a linked computer shows it " +
+                "right away.",
             granted = state.canReceiveSms,
             blocked = receiveBlocked,
             onRequest = { receiveLauncher.launch(Manifest.permission.RECEIVE_SMS) },

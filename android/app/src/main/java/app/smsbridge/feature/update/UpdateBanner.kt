@@ -172,6 +172,15 @@ fun UpdateSettingsCard(viewModel: UpdateCheckViewModel = hiltViewModel()) {
     val checking by viewModel.checking.collectAsStateWithLifecycle()
     SectionCard("App updates") {
         Text("You have version ${BuildConfig.VERSION_NAME}.", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp))
+        if (BuildConfig.PLAY) {
+            val context = androidx.compose.ui.platform.LocalContext.current
+            Text("Google Play keeps SMS Bridge up to date.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
+            Button(onClick = {
+                val uri = android.net.Uri.parse("https://play.google.com/store/apps/details?id=${context.packageName}")
+                runCatching { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, uri)) }
+            }, modifier = Modifier.padding(top = 8.dp)) { Text("Open in Google Play") }
+            return@SectionCard
+        }
         Button(onClick = viewModel::checkNow, enabled = !checking, modifier = Modifier.padding(top = 8.dp)) {
             Text(if (checking) "Checking…" else "Check for updates")
         }

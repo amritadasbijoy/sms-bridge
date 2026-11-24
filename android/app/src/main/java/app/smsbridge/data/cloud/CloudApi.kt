@@ -173,6 +173,14 @@ class CloudApi(baseUrl: String, private val token: String? = null) {
         call("POST", "/api/v1/vault/leave", JSONObject())
     }
 
+    /** The account's username and whether it has a password ("Delete my account" asks for it). */
+    fun accountInfo(): Pair<String, Boolean> = call("GET", "/api/v1/vault/account").let { it.getString("username") to it.getBoolean("hasPassword") }
+
+    /** Deletes the whole account; [password] is the login secret derived from the password, if it has one. */
+    fun deleteAccount(password: String?) {
+        call("POST", "/api/v1/vault/delete-account", JSONObject().put("password", password ?: JSONObject.NULL))
+    }
+
     fun revokeLinked(id: String) {
         call("POST", "/api/v1/vault/linked/$id/revoke", JSONObject())
     }

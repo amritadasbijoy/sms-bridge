@@ -48,6 +48,8 @@ import kotlinx.serialization.Serializable
 @Serializable data class Retention(val days: Int? = null)
 /** "Delete my account". [password] is the browser-derived login secret; temporary accounts have none. */
 @Serializable data class DeleteAccount(val password: String? = null)
+/** For the phone's "Delete my account": the username salts the login secret it derives from the password. */
+@Serializable data class AccountInfo(val username: String, val hasPassword: Boolean)
 @Serializable data class LinkedDevice(
     val id: String, val name: String, val label: String?, val platform: String, val trusted: Boolean,
     val lastSeenAt: String?, val expiresAt: String?,
@@ -236,6 +238,10 @@ class SimpleService(private val db: Db, private val wake: Notices) {
         sync.approveBy(userId, browser, browser, Approve(body.keys), ip)
     }
 
+    suspend fun accountInfo(userId: UUID): AccountInfo = db.tx {
+        query("SELECT username, password_hash FROM users WHERE id = ?", userId) { AccountInfo(it.getString(1), it.getString(2) != null) }.single()
+    }
+
     /**
      * "Delete my account": removes the account with all its phones, browsers, keys and server copies
      * of messages (every table cascades from users). An account with a password must confirm it.
@@ -359,7 +365,19 @@ fun Route.simpleRoutes(auth: AuthService, sync: SyncService, simple: SimpleServi
         simple.saveAccount(user, call.receive(), call.clientIp())
         call.respond(HttpStatusCode.NoContent)
     }
+    get("/vault/account") {
+        val d = sync.device(call)
+        if (!d.trusted) throw ApiException(HttpStatusCode.Forbidden, "not_trusted", "Approve this phone first.")
+        call.respond(simple.accountInfo(d.userId))
+    }
     rateLimit(AUTH_LIMIT) {
+        // The phone's "Delete my account" (an approved phone of the account).
+        post("/vault/delete-account") {
+            val d = sync.device(call)
+            if (!d.trusted) throw ApiException(HttpStatusCode.Forbidden, "not_trusted", "Approve this phone first.")
+            simple.deleteAccount(d.userId, call.receive<DeleteAccount>().password, call.clientIp())
+            call.respond(HttpStatusCode.NoContent)
+        }
         post("/auth/delete-account") {
             val user = auth.requireUser(call).first
             simple.deleteAccount(user, call.receive<DeleteAccount>().password, call.clientIp())

@@ -50,6 +50,15 @@ fun DefaultSmsAppCard(
     }
 
     SectionCard("Default SMS app", modifier = modifier) {
+        if (app.smsbridge.BuildConfig.PLAY) {
+            Text(
+                "The Google Play version of SMS Bridge cannot be the default SMS app, so it cannot write messages into your phone. " +
+                    "Restore them into the SMS Bridge archive instead.",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+            return@SectionCard
+        }
         if (state.isDefaultSmsApp) {
             Text(
                 "SMS Bridge is your default SMS app. It receives and stores new messages, notifies you, " +

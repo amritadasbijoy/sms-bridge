@@ -35,6 +35,7 @@ class UpdateChecker @Inject constructor(
 ) {
     /** The newer version, or null if this one is current or the check failed. */
     suspend fun check(force: Boolean = false): UpdateInfo? = withContext(Dispatchers.IO) {
+        if (BuildConfig.PLAY) return@withContext null // Google Play updates this build.
         // Never linked yet: ask the site the app was downloaded from.
         val server = settings.getString(K_SERVER) ?: "https://${BuildConfig.DEFAULT_SITE}"
         val now = time.nowMillis()

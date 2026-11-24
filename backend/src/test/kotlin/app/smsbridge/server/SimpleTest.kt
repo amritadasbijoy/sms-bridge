@@ -293,6 +293,26 @@ class SimpleTest {
     }
 
     @Test
+    fun anApprovedPhoneDeletesTheAccountWithThePassword() = api {
+        val phoneClient = createClient { }
+        val phone = phoneClient.newPhone()
+        val browser = createClient { install(HttpCookies) }
+        val req = obj(browser.postJson("/api/v1/auth/login-requests", """{"name":"Chrome","encPublicKey":"${key()}","signPublicKey":"${key()}"}"""))
+        phoneClient.postJson("/api/v1/vault/login-requests/${req["requestId"]!!.jsonPrimitive.content}/approve", oneKey, bearer = phone)
+        browser.get("/api/v1/auth/login-requests/${req["requestId"]!!.jsonPrimitive.content}") { header(REQUEST_SECRET_HEADER, req["secret"]!!.jsonPrimitive.content) }
+        val secret = bytes(32)
+        browser.postJson("/api/v1/auth/account", """{"username":"PhoneUser","password":"$secret"}""")
+
+        val info = obj(phoneClient.get("/api/v1/vault/account") { header(HttpHeaders.Authorization, "Bearer $phone") })
+        assertEquals("PhoneUser", info["username"]!!.jsonPrimitive.content)
+        assertEquals("true", info["hasPassword"]!!.jsonPrimitive.content)
+        assertEquals(HttpStatusCode.Forbidden, phoneClient.postJson("/api/v1/vault/delete-account", "{}", bearer = phone).status)
+        assertEquals(HttpStatusCode.NoContent, phoneClient.postJson("/api/v1/vault/delete-account", """{"password":"$secret"}""", bearer = phone).status)
+        assertEquals(0L, db.tx { query("SELECT count(*) FROM users") { it.getLong(1) }.single() })
+        assertEquals(HttpStatusCode.Unauthorized, browser.get("/api/v1/auth/me").status)
+    }
+
+    @Test
     fun aScannedPhoneMovesIntoTheAccountTheUserSignsInTo() = api {
         // The old account: a phone, a browser, and a saved password.
         val oldPhoneClient = createClient { }

@@ -25,11 +25,12 @@ EXPECTED_CERT="40ba726992e971e0cf53eb776f1e315cef349fb4e105d31aab7ec95defd96195"
 APKSIGNER=$(ls -d "$HOME"/Library/Android/sdk/build-tools/*/apksigner | tail -1)
 
 # "local" builds the test-only releaseTest variant (same key, may reach the local HTTP stack).
-VARIANT=release; TASK=assembleRelease
-if [ "$TARGET" = "local" ]; then VARIANT=releaseTest; TASK=assembleReleaseTest; fi
-echo "Building SMS Bridge $NAME ($CODE, $VARIANT)…"
+# Always the "web" flavor: the Google Play flavor is uploaded to Play as an AAB instead.
+VARIANT=release; TASK=assembleWebRelease
+if [ "$TARGET" = "local" ]; then VARIANT=releaseTest; TASK=assembleWebReleaseTest; fi
+echo "Building SMS Bridge $NAME ($CODE, web $VARIANT)…"
 (cd "$ROOT/android" && ./gradlew -q ":app:$TASK")
-APK="$ROOT/android/app/build/outputs/apk/$VARIANT/app-$VARIANT.apk"
+APK="$ROOT/android/app/build/outputs/apk/web/$VARIANT/app-web-$VARIANT.apk"
 CERT=$("$APKSIGNER" verify --print-certs "$APK" | grep -m1 'SHA-256 digest' | awk '{print $NF}')
 if [ "$CERT" != "$EXPECTED_CERT" ]; then
   echo "Refusing to publish: the APK is not signed with the SMS Bridge release key." >&2

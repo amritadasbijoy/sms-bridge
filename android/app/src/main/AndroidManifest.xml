@@ -15,24 +15,13 @@
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <!-- Re-arm periodic reconciliation after a reboot. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <!-- Sending, used only while SMS Bridge is the default SMS app (the SMS role grants it). -->
-    <uses-permission android:name="android.permission.SEND_SMS" />
     <!-- New-message notifications in default SMS app mode (runtime permission on Android 13+). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!--
-        Device-to-device transfer over the local Wi-Fi (Phase 4b): TLS sockets between two paired
-        phones only. SMS Bridge makes no other network connections.
-    -->
+    <!-- Encrypted sync with the linked computers (HTTPS) and phone-to-phone transfer over local Wi-Fi. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Keeps the phone reachable for approval requests while the app is closed (shown as a notification). -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
-    <!-- Lets the user exclude SMS Bridge from battery optimisation (asked once, from the Sync tab). -->
-    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
-    <!-- Installs updates published on the user's own server (Android asks the user once). -->
-    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
-    <!-- Android 12+: once SMS Bridge installed its own current version, later updates may skip the confirmation. -->
-    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
     <!-- QR scanning for pairing (requested only when the user taps "Scan"). Camera is optional. -->
     <uses-feature
         android:name="android.hardware.camera"
@@ -68,65 +57,9 @@
                 <data android:scheme="smsbridge" android:host="pair" />
                 <data android:scheme="smsbridge" android:host="login" />
             </intent-filter>
-            <!-- SMS role requirement: compose from sms:/smsto:/mms:/mmsto: links. -->
-            <intent-filter>
-                <action android:name="android.intent.action.SENDTO" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="sms" />
-                <data android:scheme="smsto" />
-                <data android:scheme="mms" />
-                <data android:scheme="mmsto" />
-            </intent-filter>
         </activity>
 
-        <!-- ===== Default SMS app (SMS role) components ===== -->
-
-        <receiver
-            android:name=".data.sms.SmsDeliverReceiver"
-            android:exported="true"
-            android:permission="android.permission.BROADCAST_SMS">
-            <intent-filter>
-                <action android:name="android.provider.Telephony.SMS_DELIVER" />
-            </intent-filter>
-        </receiver>
-
-        <!-- Required by the role. MMS is not supported; the user is notified instead. -->
-        <receiver
-            android:name=".data.sms.MmsWapPushReceiver"
-            android:exported="true"
-            android:permission="android.permission.BROADCAST_WAP_PUSH">
-            <intent-filter>
-                <action android:name="android.provider.Telephony.WAP_PUSH_DELIVER" />
-                <data android:mimeType="application/vnd.wap.mms-message" />
-            </intent-filter>
-        </receiver>
-
-        <receiver
-            android:name=".data.update.UpdateInstallReceiver"
-            android:exported="false" />
-        <service
-            android:name=".data.cloud.CloudConnectionService"
-            android:exported="false"
-            android:foregroundServiceType="remoteMessaging" />
-        <service
-            android:name=".data.sms.HeadlessSmsSendService"
-            android:exported="true"
-            android:permission="android.permission.SEND_RESPOND_VIA_MESSAGE">
-            <intent-filter>
-                <action android:name="android.intent.action.RESPOND_VIA_MESSAGE" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:scheme="sms" />
-                <data android:scheme="smsto" />
-                <data android:scheme="mms" />
-                <data android:scheme="mmsto" />
-            </intent-filter>
-        </service>
-
-        <!-- Per-part sent results and delivery reports for our own PendingIntents. -->
-        <receiver
-            android:name=".data.sms.SmsStatusReceiver"
-            android:exported="false" />
+        <!-- Default SMS app components, sending and self-updates: src/web/AndroidManifest.xml. -->
 
         <!--
             Incoming SMS while SMS Bridge is NOT the default SMS app.

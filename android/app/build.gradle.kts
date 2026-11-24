@@ -9,14 +9,14 @@ plugins {
 
 android {
     namespace = "app.smsbridge"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "app.smsbridge"
         minSdk = 26
-        targetSdk = 34
-        versionCode = 23
-        versionName = "0.10.5"
+        targetSdk = 36
+        versionCode = 24
+        versionName = "0.11.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
         // Plain HTTP only to the emulator's view of the development machine (debug and releaseTest).
@@ -39,6 +39,21 @@ android {
         }
     } else {
         null
+    }
+
+    // "web": the APK from sms.techistbd.com and GitHub (self-updates, optional default SMS app).
+    // "play": Google Play (Play updates it; no sending, no default SMS app). Same package and key,
+    // so either can update the other.
+    flavorDimensions += "store"
+    productFlavors {
+        create("web") {
+            dimension = "store"
+            buildConfigField("boolean", "PLAY", "false")
+        }
+        create("play") {
+            dimension = "store"
+            buildConfigField("boolean", "PLAY", "true")
+        }
     }
 
     buildTypes {

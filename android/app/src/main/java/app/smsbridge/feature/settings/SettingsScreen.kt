@@ -93,6 +93,10 @@ class SettingsViewModel @Inject constructor(
 @Composable
 fun SettingsScreen(onOpen: (String) -> Unit = {}, viewModel: SettingsViewModel = hiltViewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val webContext = LocalContext.current
+    val openWeb: (String) -> Unit = { url ->
+        runCatching { webContext.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))) }
+    }
     val context = LocalContext.current
     var confirmRescan by rememberSaveable { mutableStateOf(false) }
 
@@ -204,8 +208,11 @@ fun SettingsScreen(onOpen: (String) -> Unit = {}, viewModel: SettingsViewModel =
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(top = 4.dp),
                 )
+                TextButton(onClick = { openWeb("https://${app.smsbridge.BuildConfig.DEFAULT_SITE}/privacy/") }) { Text("Privacy policy") }
             }
         }
+
+        item { DeleteAccountCard(onOpenWeb = openWeb) }
 
         item {
             SectionCard("Advanced") {
