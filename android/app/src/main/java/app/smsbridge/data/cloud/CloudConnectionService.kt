@@ -141,7 +141,16 @@ class CloudConnectionService : Service() {
             .setAutoCancel(true)
             .setContentIntent(openApp(request.loginRequestId ?: request.deviceId))
             .build()
-        runCatching { NotificationManagerCompat.from(this).notify(request.deviceId.hashCode(), n) }
+        post(request.deviceId.hashCode(), n)
+    }
+
+    /** Shows [n] if the user allows notifications (Android 13+ asks); otherwise silently skips it. */
+    private fun post(id: Int, n: android.app.Notification) {
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) return
+        runCatching { NotificationManagerCompat.from(this).notify(id, n) }
     }
 
     private fun notifyUpdate(info: app.smsbridge.data.update.UpdateInfo) {
@@ -157,7 +166,7 @@ class CloudConnectionService : Service() {
             .setAutoCancel(true)
             .setContentIntent(PendingIntent.getActivity(this, 8, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
             .build()
-        runCatching { NotificationManagerCompat.from(this).notify(ID_UPDATE, n) }
+        post(ID_UPDATE, n)
     }
 
     private fun notifyRemote(sms: RemoteSms) {
@@ -179,7 +188,7 @@ class CloudConnectionService : Service() {
             .setWhen(sms.date)
             .setContentIntent(openRemote())
             .build()
-        runCatching { NotificationManagerCompat.from(this).notify(("remote:" + sms.date + sms.address).hashCode(), n) }
+        post(("remote:" + sms.date + sms.address).hashCode(), n)
     }
 
     private fun openRemote(): PendingIntent {
