@@ -86,3 +86,21 @@ No account or password is needed.
 5. Send an SMS to the phone: it appears in the browser within seconds.
 6. In the app, "Stop sharing" removes the browser; Settings → "Delete my account" deletes everything on the server.
 ```
+
+## Permission declarations (shown once a closed-testing release is sent for review)
+Demo video: https://sms.techistbd.com/download/sms-bridge-demo.mp4
+
+### SMS permissions (READ_SMS, RECEIVE_SMS)
+- Core functionality: **SMS-based app → Cross-device synchronization or transfer of SMS or calls.**
+- Description:
+  "SMS Bridge shows the user's SMS on a computer they link. After the user links a computer with a QR code or 8-digit
+  code and chooses what to share (new only, 7 or 30 days), the app reads SMS (READ_SMS) and new incoming SMS
+  (RECEIVE_SMS), encrypts them end to end on the phone and syncs them to that computer. The user can stop sharing
+  any time. The app does not send SMS and is not the default SMS handler."
+- Not default handler; no SEND_SMS in the Play build.
+
+### Foreground service (FOREGROUND_SERVICE_REMOTE_MESSAGING, type remoteMessaging)
+- Feature: keeps the encrypted connection to the user's linked computers open, so new SMS reach them right away
+  and new browsers can be approved. Started only after the user links a computer; shows an ongoing
+  "SMS Bridge is connected" notification; stops when nothing is linked.
+- User impact if deferred/interrupted: SMS reach the computer late; the user must open the app to sync.
