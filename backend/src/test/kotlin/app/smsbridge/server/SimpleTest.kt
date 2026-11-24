@@ -251,6 +251,48 @@ class SimpleTest {
     }
 
     @Test
+    fun deletingTheAccountRemovesEverythingAndNeedsThePassword() = api {
+        val phoneClient = createClient { }
+        val phone = phoneClient.newPhone()
+        val browser = createClient { install(HttpCookies) }
+        val req = obj(browser.postJson("/api/v1/auth/login-requests", """{"name":"Chrome","encPublicKey":"${key()}","signPublicKey":"${key()}"}"""))
+        val id = req["requestId"]!!.jsonPrimitive.content
+        phoneClient.postJson("/api/v1/vault/login-requests/$id/approve", oneKey, bearer = phone)
+        browser.get("/api/v1/auth/login-requests/$id") { header(REQUEST_SECRET_HEADER, req["secret"]!!.jsonPrimitive.content) }
+        val (user, phoneId) = db.tx { query("SELECT user_id, id FROM devices WHERE platform = 'android'") { it.uuid("user_id") to it.uuid("id") }.single() }
+        db.tx {
+            update(
+                "INSERT INTO sync_events (event_id, user_id, device_id, device_sequence, event_type, key_version, ciphertext, signature) VALUES (?, ?, ?, 1, 'opaque', 1, ?, ?)",
+                UUID.randomUUID(), user, phoneId, ByteArray(40), ByteArray(64),
+            )
+        }
+        val secret = bytes(32)
+        browser.postJson("/api/v1/auth/account", """{"username":"leaving","password":"$secret"}""")
+
+        // Without the password, or with a wrong one, nothing is deleted.
+        assertEquals(HttpStatusCode.Forbidden, browser.postJson("/api/v1/auth/delete-account", "{}").status)
+        assertEquals(HttpStatusCode.Forbidden, browser.postJson("/api/v1/auth/delete-account", """{"password":"${bytes(32)}"}""").status)
+        assertEquals(1L, db.tx { query("SELECT count(*) FROM users WHERE id = ?", user) { it.getLong(1) }.single() })
+
+        // With it: the account, its devices, keys and server copies of messages are gone.
+        assertEquals(HttpStatusCode.NoContent, browser.postJson("/api/v1/auth/delete-account", """{"password":"$secret"}""").status)
+        listOf("users" to "id", "devices" to "user_id", "sync_events" to "user_id", "vault_keys" to "user_id", "user_sessions" to "user_id").forEach { (t, col) ->
+            assertEquals(0L, runBlocking { db.tx { query("SELECT count(*) FROM $t WHERE $col = ?", user) { it.getLong(1) }.single() } }, t)
+        }
+        assertEquals(HttpStatusCode.Unauthorized, browser.get("/api/v1/auth/me").status)
+        assertEquals(HttpStatusCode.Unauthorized, phoneClient.get("/api/v1/vault") { header(HttpHeaders.Authorization, "Bearer $phone") }.status)
+
+        // A temporary account (no password) is deleted straight away.
+        val other = createClient { install(HttpCookies) }
+        val req2 = obj(other.postJson("/api/v1/auth/login-requests", """{"name":"Edge","encPublicKey":"${key()}","signPublicKey":"${key()}"}"""))
+        val phone2 = phoneClient.newPhone()
+        phoneClient.postJson("/api/v1/vault/login-requests/${req2["requestId"]!!.jsonPrimitive.content}/approve", oneKey, bearer = phone2)
+        other.get("/api/v1/auth/login-requests/${req2["requestId"]!!.jsonPrimitive.content}") { header(REQUEST_SECRET_HEADER, req2["secret"]!!.jsonPrimitive.content) }
+        assertEquals(HttpStatusCode.NoContent, other.postJson("/api/v1/auth/delete-account", "{}").status)
+        assertEquals(0L, db.tx { query("SELECT count(*) FROM users") { it.getLong(1) }.single() })
+    }
+
+    @Test
     fun aScannedPhoneMovesIntoTheAccountTheUserSignsInTo() = api {
         // The old account: a phone, a browser, and a saved password.
         val oldPhoneClient = createClient { }

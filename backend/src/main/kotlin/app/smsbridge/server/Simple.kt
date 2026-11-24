@@ -46,6 +46,8 @@ import kotlinx.serialization.Serializable
 )
 @Serializable data class SelfApprove(val verifier: String, val keys: List<WrappedKey>)
 @Serializable data class Retention(val days: Int? = null)
+/** "Delete my account". [password] is the browser-derived login secret; temporary accounts have none. */
+@Serializable data class DeleteAccount(val password: String? = null)
 @Serializable data class LinkedDevice(
     val id: String, val name: String, val label: String?, val platform: String, val trusted: Boolean,
     val lastSeenAt: String?, val expiresAt: String?,
@@ -234,11 +236,30 @@ class SimpleService(private val db: Db, private val wake: Notices) {
         sync.approveBy(userId, browser, browser, Approve(body.keys), ip)
     }
 
+    /**
+     * "Delete my account": removes the account with all its phones, browsers, keys and server copies
+     * of messages (every table cascades from users). An account with a password must confirm it.
+     */
+    suspend fun deleteAccount(userId: UUID, password: String?, ip: String) {
+        val hash = db.tx { query("SELECT password_hash FROM users WHERE id = ?", userId) { it.getString(1) }.singleOrNull() }
+        if (hash != null && (password == null || !Passwords.verify(password.toCharArray(), hash))) {
+            db.tx { audit(userId, null, "account_delete", "denied", ip) }
+            throw ApiException(HttpStatusCode.Forbidden, "wrong_password", "That password is not right.")
+        }
+        db.tx {
+            update("DELETE FROM users WHERE id = ?", userId)
+            // Security log entries are not linked to the account by a key; drop who and where.
+            update("UPDATE audit_events SET user_id = NULL, device_id = NULL, ip = NULL WHERE user_id = ?", userId)
+            audit(null, null, "account_deleted", "ok", null)
+        }
+        wake.bump(userId)
+    }
+
     // ---- Background cleanup ----------------------------------------------------------------------
 
     /**
      * Unlinks browsers past their auto-unlink time, drops server copies older than each account's
-     * range, and deletes abandoned temporary accounts.
+     * range, deletes abandoned temporary accounts, and keeps the security log for 90 days.
      */
     suspend fun cleanup() {
         val touched = db.tx {
@@ -273,8 +294,10 @@ class SimpleService(private val db: Db, private val wake: Notices) {
                   AND NOT EXISTS (SELECT 1 FROM user_sessions s WHERE s.user_id = u.id AND s.last_used_at > now() - interval '7 days')
                 """.trimIndent(),
             ) { it.uuid("id") }
+            update("DELETE FROM audit_events WHERE occurred_at < now() - interval '90 days'")
             abandoned.forEach { id ->
                 update("DELETE FROM users WHERE id = ?", id)
+                update("UPDATE audit_events SET user_id = NULL, device_id = NULL, ip = NULL WHERE user_id = ?", id)
                 audit(null, null, "abandoned_account_deleted", "ok", null)
             }
             expired.map { it.second }.toSet() - abandoned.toSet()
@@ -335,6 +358,13 @@ fun Route.simpleRoutes(auth: AuthService, sync: SyncService, simple: SimpleServi
         val user = auth.requireUser(call).first
         simple.saveAccount(user, call.receive(), call.clientIp())
         call.respond(HttpStatusCode.NoContent)
+    }
+    rateLimit(AUTH_LIMIT) {
+        post("/auth/delete-account") {
+            val user = auth.requireUser(call).first
+            simple.deleteAccount(user, call.receive<DeleteAccount>().password, call.clientIp())
+            call.respond(HttpStatusCode.NoContent)
+        }
     }
     route("/vault/password") {
         get { call.respond(simple.passwordVault(auth.requireUser(call).first)) }

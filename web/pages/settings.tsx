@@ -7,7 +7,7 @@ import { SaveAccountCard } from "@/components/save-account";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Label } from "@/components/ui/input";
 import { api, ApiError } from "@/lib/api";
-import { ensureDevice, savePasswordVault } from "@/lib/browser-device";
+import { ensureDevice, forgetLocal, savePasswordVault } from "@/lib/browser-device";
 import { loginSecret, MIN_PASSWORD } from "@/lib/password";
 import { useSession } from "@/lib/session";
 import { formatDateTime } from "@/lib/utils";
@@ -232,6 +232,73 @@ function Browsers() {
   );
 }
 
+/** "Delete my account": everything on the server goes, after the password (if any) is confirmed. */
+function DeleteAccount() {
+  const { me, lock } = useSession();
+  const [open, setOpen] = useState(false);
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  if (!me) return null;
+
+  async function remove(e: FormEvent) {
+    e.preventDefault();
+    if (!me) return;
+    setBusy(true);
+    setError(null);
+    try {
+      if (me.hasPassword) {
+        // Older accounts may still have the plain password on the server.
+        await api.deleteAccount(await loginSecret(me.username, password)).catch((err) => {
+          if (err instanceof ApiError && err.code === "wrong_password") return api.deleteAccount(password);
+          throw err;
+        });
+      } else {
+        await api.deleteAccount();
+      }
+      lock();
+      await forgetLocal(me.userId).catch(() => {});
+      window.location.replace("/delete-account/?done=1");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not delete the account. Try again.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card className="border-destructive/40">
+      <CardHeader>
+        <CardTitle>Delete my account</CardTitle>
+        <CardDescription>
+          Deletes your account, every linked phone and browser, and all messages stored on the server. This cannot be undone. The
+          SMS on your phones are not touched.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {!open ? (
+          <Button variant="outline" onClick={() => setOpen(true)}>Delete my account…</Button>
+        ) : (
+          <form onSubmit={remove} className="max-w-xs space-y-3">
+            {error && <Alert tone="error">{error}</Alert>}
+            {me.hasPassword ? (
+              <div className="space-y-2">
+                <Label htmlFor="delete-password">Your password</Label>
+                <Input id="delete-password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+              </div>
+            ) : (
+              <p className="text-sm">Are you sure? Your phones will need to be linked again to use SMS Bridge.</p>
+            )}
+            <div className="flex gap-2">
+              <Button type="submit" variant="destructive" disabled={busy}>{busy ? "Deleting…" : "Delete everything"}</Button>
+              <Button type="button" variant="ghost" onClick={() => { setOpen(false); setPassword(""); setError(null); }}>Cancel</Button>
+            </div>
+          </form>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function Settings() {
   const { me } = useSession();
   return (
@@ -251,8 +318,12 @@ export default function Settings() {
               Messages are encrypted on your phone and opened only in browsers you linked or signed into with your password. The
               server never sees your messages or your password.
             </p>
+            <p>
+              <a className="underline" href="/privacy/">Privacy policy</a> · <a className="underline" href="/terms/">Terms of use</a>
+            </p>
           </CardContent>
         </Card>
+        <DeleteAccount />
       </div>
     </Shell>
   );

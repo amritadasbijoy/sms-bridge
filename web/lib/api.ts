@@ -114,6 +114,7 @@ export const api = {
   setLabel: (deviceId: string, label: string | null) => request<void>("PUT", `/devices/${encodeURIComponent(deviceId)}/label`, { label }),
   /** "Save your account": [password] is the browser-derived login secret (lib/password.ts). */
   saveAccount: (username: string, password: string) => request<void>("POST", "/auth/account", { username, password }),
+  deleteAccount: (password?: string) => request<void>("POST", "/auth/delete-account", { password }),
   passwordVault: () => request<{ salt: string; iterations: number; keys: WrappedKey[] }>("GET", "/vault/password"),
   setPasswordVault: (body: { deviceId: string; salt: string; iterations: number; publicKey: string; verifier: string; keys: WrappedKey[] }) =>
     request<void>("PUT", "/vault/password", body),

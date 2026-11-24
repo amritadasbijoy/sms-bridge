@@ -1,4 +1,5 @@
 import Head from "next/head";
+import { PublicFooter } from "@/components/public-page";
 import { useRouter } from "next/router";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Alert } from "@/components/ui/alert";
@@ -217,6 +218,7 @@ export default function Login() {
         <div className="mt-3 flex flex-wrap justify-center gap-1 text-sm">
           <Button variant="ghost" size="sm" onClick={() => setMode("password")}>Have an account? Sign in with username and password</Button>
         </div>
+        <PublicFooter />
       </div>
     </div>
   );
