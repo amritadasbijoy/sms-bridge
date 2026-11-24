@@ -28,3 +28,6 @@ node_modules/
 .next/
 dist/
 infrastructure/downloads/
+
+# Private work log (kept locally, not published)
+docs/PROGRESS.md
