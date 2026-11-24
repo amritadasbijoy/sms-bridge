@@ -6,6 +6,8 @@ with the app, and new SMS appear in the browser the moment the phone receives th
 
 Live at **[sms.techistbd.com](https://sms.techistbd.com)** · Android app + self-hosted server + web app
 
+**[⬇ Download the Android app (APK)](https://github.com/amritadasbijoy/sms-bridge/releases/latest)** · Android 8.0 or newer · updates arrive inside the app
+
 ![How SMS Bridge works](docs/screenshots/linkedin/0-workflow.png)
 
 ## Features
