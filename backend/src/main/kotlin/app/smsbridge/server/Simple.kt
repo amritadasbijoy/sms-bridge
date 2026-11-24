@@ -236,7 +236,10 @@ class SimpleService(private val db: Db, private val wake: Notices) {
 
     // ---- Background cleanup ----------------------------------------------------------------------
 
-    /** Unlinks browsers past their auto-unlink time and drops server copies older than each account's range. */
+    /**
+     * Unlinks browsers past their auto-unlink time, drops server copies older than each account's
+     * range, and deletes abandoned temporary accounts.
+     */
     suspend fun cleanup() {
         val touched = db.tx {
             // Auto-unlink time passed, or a browser started linking a day ago and never finished.
@@ -259,7 +262,22 @@ class SimpleService(private val db: Db, private val wake: Notices) {
                   AND e.received_at < now() - make_interval(days => u.retention_days)
                 """.trimIndent(),
             )
-            expired.map { it.second }.toSet()
+            // Temporary accounts (made by scanning, never given a password) that lost their phone
+            // and have not been used for a week: nothing can add messages to them any more.
+            val abandoned = query(
+                """
+                SELECT u.id FROM users u
+                WHERE u.password_hash IS NULL AND u.created_at < now() - interval '7 days'
+                  AND NOT EXISTS (SELECT 1 FROM devices d WHERE d.user_id = u.id AND d.platform <> 'web' AND d.revoked_at IS NULL)
+                  AND NOT EXISTS (SELECT 1 FROM devices d WHERE d.user_id = u.id AND d.last_seen_at > now() - interval '7 days')
+                  AND NOT EXISTS (SELECT 1 FROM user_sessions s WHERE s.user_id = u.id AND s.last_used_at > now() - interval '7 days')
+                """.trimIndent(),
+            ) { it.uuid("id") }
+            abandoned.forEach { id ->
+                update("DELETE FROM users WHERE id = ?", id)
+                audit(null, null, "abandoned_account_deleted", "ok", null)
+            }
+            expired.map { it.second }.toSet() - abandoned.toSet()
         }
         touched.forEach(wake::bump)
     }

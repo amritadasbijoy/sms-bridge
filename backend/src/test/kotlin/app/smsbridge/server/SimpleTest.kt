@@ -294,4 +294,29 @@ class SimpleTest {
         val oldBrowserId = db.tx { query("SELECT id FROM devices WHERE user_id = ? AND platform = 'web' AND vault_trusted_at IS NOT NULL LIMIT 1", amrita) { it.uuid("id") }.single() }
         assertEquals(HttpStatusCode.Conflict, oldBrowser.postJson("/api/v1/account/move/start", """{"deviceId":"$oldBrowserId"}""").status)
     }
+
+    @Test
+    fun onlyAbandonedTemporaryAccountsAreDeleted() = runBlocking<Unit> {
+        fun user(name: String, password: String?, daysOld: Int) = UUID.randomUUID().also { id ->
+            runBlocking { db.tx { update("INSERT INTO users (id, username, password_hash, created_at) VALUES (?, ?, ?, now() - make_interval(days => ?))", id, name, password, daysOld) } }
+        }
+        fun device(user: UUID, platform: String, seenDaysAgo: Int, revoked: Boolean = false) = runBlocking {
+            db.tx {
+                update(
+                    "INSERT INTO devices (id, user_id, name, platform, last_seen_at, revoked_at) VALUES (?, ?, 'x', ?, now() - make_interval(days => ?), ?)",
+                    UUID.randomUUID(), user, platform, seenDaysAgo, if (revoked) java.time.OffsetDateTime.now() else null,
+                )
+            }
+        }
+        val abandoned = user("user-old1", null, 30).also { device(it, "web", 20); device(it, "android", 25, revoked = true) }
+        val empty = user("user-old2", null, 30)
+        val withPassword = user("amrita", "hash", 30)
+        val withPhone = user("user-phone", null, 30).also { device(it, "android", 20) }
+        val recentlyUsed = user("user-recent", null, 30).also { device(it, "web", 1) }
+        val young = user("user-young", null, 2)
+        SimpleService(db, Notices()).cleanup()
+        val left = db.tx { query("SELECT username FROM users ORDER BY username") { it.getString(1) } }
+        assertEquals(listOf("amrita", "user-phone", "user-recent", "user-young"), left)
+        listOf(abandoned, empty, withPassword, withPhone, recentlyUsed, young).size
+    }
 }
