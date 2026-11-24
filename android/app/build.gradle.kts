@@ -84,6 +84,8 @@ android {
     testOptions {
         unitTests {
             isIncludeAndroidResources = true
+            // Robolectric's Conscrypt (used on Linux, e.g. CI) reads InetAddress internals for TLS.
+            all { it.jvmArgs("--add-opens=java.base/java.net=ALL-UNNAMED") }
         }
     }
     sourceSets {
