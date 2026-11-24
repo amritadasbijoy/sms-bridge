@@ -10,7 +10,9 @@ import app.smsbridge.ui.NavigationRequests
 import app.smsbridge.ui.SmsBridgeRoot
 import app.smsbridge.ui.theme.SmsBridgeTheme
 import dagger.hilt.android.AndroidEntryPoint
+import androidx.lifecycle.lifecycleScope
 import javax.inject.Inject
+import kotlinx.coroutines.launch
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
@@ -19,10 +21,17 @@ class MainActivity : ComponentActivity() {
 
     @Inject lateinit var navigationRequests: NavigationRequests
 
+    @Inject lateinit var cloud: app.smsbridge.data.cloud.CloudRepository
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         if (savedInstanceState == null) navigationRequests.handle(intent)
+        // Linking a computer happens inside the app: start the connection as soon as it is ready,
+        // not only on the next resume.
+        lifecycleScope.launch {
+            cloud.state.collect { if (it is app.smsbridge.data.cloud.CloudState.Ready) app.smsbridge.data.cloud.CloudConnectionService.start(this@MainActivity) }
+        }
         setContent {
             SmsBridgeTheme {
                 SmsBridgeRoot(navigationRequests)

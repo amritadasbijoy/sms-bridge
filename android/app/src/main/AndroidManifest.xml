@@ -61,6 +61,12 @@
 
         <!-- Default SMS app components, sending and self-updates: src/web/AndroidManifest.xml. -->
 
+        <!-- Keeps the encrypted connection to linked computers open (both builds). -->
+        <service
+            android:name=".data.cloud.CloudConnectionService"
+            android:exported="false"
+            android:foregroundServiceType="remoteMessaging" />
+
         <!--
             Incoming SMS while SMS Bridge is NOT the default SMS app.
             BROADCAST_SMS guarantees only the system can deliver this broadcast.

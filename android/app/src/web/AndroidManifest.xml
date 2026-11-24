@@ -31,6 +31,12 @@
             </intent-filter>
         </activity>
 
+        <!-- Declared in src/main; repeated here (same values) so lint sees its type in this file too. -->
+        <service
+            android:name=".data.cloud.CloudConnectionService"
+            android:exported="false"
+            android:foregroundServiceType="remoteMessaging" />
+
         <!-- ===== Default SMS app (SMS role) components ===== -->
 
         <receiver
@@ -56,10 +62,6 @@
         <receiver
             android:name=".data.update.UpdateInstallReceiver"
             android:exported="false" />
-        <service
-            android:name=".data.cloud.CloudConnectionService"
-            android:exported="false"
-            android:foregroundServiceType="remoteMessaging" />
         <service
             android:name=".data.sms.HeadlessSmsSendService"
             android:exported="true"
